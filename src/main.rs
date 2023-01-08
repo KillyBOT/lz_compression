@@ -11,7 +11,9 @@ fn main() {
 
     let contents = fs::read(filepath).expect("File not found");
 
-    let freq_table = build_frequency_table(&contents);
-    let huffman_tree = build_huffman_tree(freq_table);
-    println!("{:?}",huffman_tree);
+    let bitstream = encode_bytes(&contents);
+    println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]",contents.len(), bitstream.bytes_written(), (bitstream.bytes_written() as f32) / (contents.len() as f32));
+
+    //bitstream.flush();
+    //println!("{}",bitstream);
 }

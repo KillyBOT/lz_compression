@@ -1,7 +1,7 @@
 use std::collections::{BinaryHeap};
 use std::cmp::{Ordering, min, max};
 use std::fmt::{self};
-use crate::bitstream::{BitWriter, BitReader, bool_slice_to_u8, bool_slice_to_usize, bool_slice_to_u32};
+use crate::bitstream::{BitWriter, BitReader};
 
 const MAX_SYMBOLS:usize = 256;
 const MAX_SYMBOLS_SIZE:usize = 8;
@@ -247,8 +247,8 @@ fn print_huffman_code_map(huffman_code_map: &HuffmanCodeMap) {
     }
 }
 
-fn build_huffman_symbol_map(huffman_table: &[HuffmanTableData], max_level: i32) -> HuffmanSymbolMap{
-    let mut map:HuffmanSymbolMap = vec![HuffmanTableData { symbol:0, level:0 }; 1 << max_level];
+fn fill_huffman_symbol_maps(huffman_table: &[HuffmanTableData], symbol_table: &mut [HuffmanSymbol], level_table: &mut [i32], max_level: i32) {
+    //let mut map:HuffmanSymbolMap = vec![HuffmanTableData { symbol:0, level:0 }; 1 << max_level];
 
     let mut code:HuffmanPath = 0;
     let mut last_level = -1;
@@ -270,7 +270,8 @@ fn build_huffman_symbol_map(huffman_table: &[HuffmanTableData], max_level: i32) 
         //let reversed_code = reverse_u32(code);
         let start_code = (code << (max_level - level)) as usize;
         let end_code = (start_code | ((1 << (max_level - level))-1)) as usize;
-        map[start_code..=end_code].fill(HuffmanTableData { symbol, level });
+        symbol_table[start_code..=end_code].fill(symbol);
+        level_table[start_code..=end_code].fill(level);
         // for i in 0..(1 << (max_level - level)){
         //     //println!("{:011b}",(code | (i << level)) as usize);
         //     map[i | (code << (max_level - level)) as usize] = HuffmanTableData { symbol, level };
@@ -278,7 +279,6 @@ fn build_huffman_symbol_map(huffman_table: &[HuffmanTableData], max_level: i32) 
         //map[code as usize] = Some(HuffmanTableData { symbol, level });
     }
 
-    map
 }
 
 // fn print_huffman_symbol_map(huffman_symbol_map: &HuffmanSymbolMap) {
@@ -298,6 +298,8 @@ fn build_huffman_symbol_map(huffman_table: &[HuffmanTableData], max_level: i32) 
 pub fn encode_bytes_huffman(bytes: &[u8], chunk_size:usize, max_path_size:i32) -> Vec<u8> {
 
     let mut bitstream = BitWriter::new();
+
+    bitstream.write_bits_u32(max_path_size as u32, 8);
 
     for i in (0..bytes.len()).step_by(chunk_size){
         let chunk = &bytes[i..min(bytes.len(),i+chunk_size)];
@@ -338,26 +340,30 @@ pub fn decode_bytes_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut bitstream = BitReader::new(encoded_bytes);
 
-    while bitstream.bits_remaining() > 24 {
+    let total_max_level = bitstream.read_bits_into_u32(8).unwrap() as i32;
+    let mut symbol_table:Vec<HuffmanSymbol> = vec![0; 1 << total_max_level];
+    let mut level_table:Vec<i32> = vec![0; 1 << total_max_level];
+
+    while bitstream.remaining_bits() > 24 {
         //println!("{}",bitstream.bits_remaining());
 
-        let chunk_size = bool_slice_to_usize(&bitstream.read_bits(24).unwrap());
-        let symbol_num = bool_slice_to_usize(&bitstream.read_bits(8).unwrap());
-        let max_level = bool_slice_to_u32(&bitstream.read_bits(8).unwrap()) as i32;
+        let chunk_size = bitstream.read_bits_into_u32(24).unwrap() as usize;
+        let symbol_num = bitstream.read_bits_into_u32(8).unwrap();
+        let max_level = bitstream.read_bits_into_u32(8).unwrap() as i32;
         let bits_per_level = max((max_level as f32).log2().ceil() as usize,1);
         //println!("Preliminary data read");
         //println!("Chunk size: [{}] Symbol num: [{}] Max level: [{}]", chunk_size, symbol_num, max_level);
 
         let mut huffman_table:HuffmanTable = Vec::with_capacity(MAX_SYMBOLS);
         for _ in 0..symbol_num{
-            let symbol = bool_slice_to_u8(&bitstream.read_bits(8).unwrap());
-            let level = bool_slice_to_u32(&bitstream.read_bits(bits_per_level).unwrap()) as i32;
+            let symbol = bitstream.read_bits_into_u8(8).unwrap();
+            let level = bitstream.read_bits_into_u32(bits_per_level).unwrap() as i32;
             huffman_table.push(HuffmanTableData{ symbol, level });
         }
         //println!("Huffman table read");
         //print_huffman_table(&huffman_table);
 
-        let symbol_map = build_huffman_symbol_map(&huffman_table, max_level);
+        fill_huffman_symbol_maps(&huffman_table, &mut symbol_table, &mut level_table, total_max_level);
         //println!("Symbol map generated");
         //print_huffman_symbol_map(&symbol_map);
 
@@ -397,15 +403,17 @@ pub fn decode_bytes_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
         while bytes_decoded < chunk_size{
             //println!("{:011b} {}",path, bits_to_read);
             //let bit = bitstream.read_bit().unwrap();
-            path |= bool_slice_to_u32(&bitstream.read_bits(bits_to_read as usize).unwrap());
+            path |= bitstream.read_bits_into_u32(bits_to_read as usize).unwrap();
             //println!("{:011b}",path);
-            let data = symbol_map[path as usize];
+            //let data = symbol_map[path as usize];
+            let symbol = symbol_table[path as usize];
+            let level = level_table[path as usize];
 
-            bytes.push(data.symbol);
+            bytes.push(symbol);
             bytes_decoded += 1;
-            path <<= data.level;
+            path <<= level;
             path &= mask;
-            bits_to_read = data.level;
+            bits_to_read = level;
         }
         //println!("Chunk decoded");
 

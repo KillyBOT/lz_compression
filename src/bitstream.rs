@@ -1,5 +1,6 @@
 use std::fmt::{self};
 
+const U64_MSB_MASK:u64 = 1 << 63;
 
 pub struct BitWriter {
     bits_written_to_buffer:usize,
@@ -8,7 +9,9 @@ pub struct BitWriter {
 }
 
 pub struct BitReader<'a> {
-    bits_read:usize,
+    buffer:u64,
+    bits_in_buffer:usize,
+    unused_bits_in_buffer:usize,
     bytes:&'a [u8]
 }
 
@@ -44,40 +47,109 @@ impl<'a> Iterator for BitReader<'a>{
 
 impl<'a> BitReader<'a>{
     pub fn new(bytes: &'a [u8]) -> Self {
-        BitReader { bits_read: 0, bytes: bytes }
+        let mut br = BitReader { buffer: 0, bits_in_buffer:0, unused_bits_in_buffer:64, bytes: bytes };
+        br.refill();
+
+        br
     }
 
-    pub fn bits_remaining(&self) -> usize {
-        (self.bytes.len() << 3) - self.bits_read
+    pub fn remaining_bits(&self) -> usize {
+        (self.bytes.len() << 3) + self.bits_in_buffer
+    }
+    fn refill(&mut self) {
+        while self.unused_bits_in_buffer >= 8 && self.bytes.len() > 0{
+            let byte = self.bytes[0];
+            self.bytes = &self.bytes[1..];
+            self.bits_in_buffer += 8;
+            self.unused_bits_in_buffer -= 8;
+            self.buffer |= ((byte as u64) << self.unused_bits_in_buffer);
+        }
     }
 
     pub fn read_bit(&mut self) -> Option<bool> {
 
-        if self.bits_read == self.bytes.len() << 3{
+        if self.remaining_bits() == 0 {
             return None;
         }
 
-        let bit = (self.bytes[self.bits_read >> 3] & (1 << (7 - (self.bits_read & 0b111)))) > 0;
-        self.bits_read += 1;
-        
+        //let bit = (self.bytes[self.bits_read >> 3] & (1 << (7 - (self.bits_read & 0b111)))) > 0;
+        let bit = (self.buffer & U64_MSB_MASK) > 0;
+        self.buffer <<= 1;
+        self.bits_in_buffer -= 1;
+        self.unused_bits_in_buffer += 1;
+        self.refill();
+
         Some(bit)
     }
-    pub fn read_bits(&mut self, bit_num:usize) -> Option<Vec<bool>> {
 
-        if self.bits_read == self.bytes.len() << 3{
+    pub fn read_bits_into_u8(&mut self, bit_num:usize) -> Option<u8> {
+
+        assert!(bit_num <= 8, "Can only read up to 8 bits, attempted to read [{}] bits", bit_num);
+
+        if bit_num > self.remaining_bits() {
             return None;
         }
 
-        let mut bool_vec = Vec::with_capacity(bit_num);
+        let bits = (self.buffer >> (64 - bit_num)) as u8;
+        self.buffer <<= bit_num;
+        self.bits_in_buffer -= bit_num;
+        self.unused_bits_in_buffer += bit_num;
+        self.refill();
 
-        for _ in 0..bit_num{
-            if let Some(bit) = self.read_bit() {
-                bool_vec.push(bit);
-            }
+        Some(bits)
+    }
+
+    pub fn read_bits_into_u32(&mut self, bit_num:usize) -> Option<u32> {
+
+        assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
+
+        if bit_num > self.remaining_bits() {
+            return None;
         }
 
-        Some(bool_vec)
+        let bits = (self.buffer >> (64 - bit_num)) as u32;
+        self.buffer <<= bit_num;
+        self.bits_in_buffer -= bit_num;
+        self.unused_bits_in_buffer += bit_num;
+        self.refill();
+
+        Some(bits)
     }
+
+    // pub fn read_bits_into_usize(&mut self, bit_num:usize) -> Option<u8> {
+
+    //     let usize_bit_size = std::mem::size_of::<usize>() << 3;
+    //     assert!(bit_num <= usize_bit_size, "Can only read up to [{}] bits, attempted to read [{}] bits", usize_bit_size, bit_num);
+
+    //     if bit_num > self.remaining_bits() {
+    //         return None;
+    //     }
+
+    //     let bits = (self.buffer >> (64 - bit_num)) as u8;
+    //     self.buffer <<= bit_num;
+    //     self.bits_in_buffer -= bit_num;
+    //     self.unused_bits_in_buffer += bit_num;
+    //     self.refill();
+
+    //     Some(bits)
+    // }
+
+    // pub fn read_bits(&mut self, bit_num:usize) -> Option<Vec<bool>> {
+
+    //     if self.bits_read == self.bytes.len() << 3{
+    //         return None;
+    //     }
+
+    //     let mut bool_vec = Vec::with_capacity(bit_num);
+
+    //     for _ in 0..bit_num{
+    //         if let Some(bit) = self.read_bit() {
+    //             bool_vec.push(bit);
+    //         }
+    //     }
+
+    //     Some(bool_vec)
+    // }
 
 }
 
@@ -98,15 +170,6 @@ impl BitWriter {
         }
     }
 
-    // pub fn finish(&mut self) {
-    //     self.flush();
-    //     let bits_remaining = 8 - self.bits_written_to_buffer;
-    //     self.buffer <<= bits_remaining;
-    //     self.bytes.push((self.buffer >> 56) as u8);
-    //     self.buffer = 0;
-    //     self.bits_written_to_buffer = 0;
-    // }
-
     pub fn write_bits_u32(&mut self, data: u32, bit_num:usize){
         assert!(bit_num <= 32, "Number of bits must less than 32, given [{}] bits", bit_num);
         
@@ -125,51 +188,4 @@ impl BitWriter {
         bytes.clone()
     }
 
-    // pub fn write_bytes(&mut self, bytes: &Vec<u8>) {
-    //     self.bits_written += bytes.len() * 8;
-    //     self.bytes.extend(bytes);
-    // }
-
-}
-
-pub fn bool_slice_to_u8(slice: &[bool]) -> u8{
-    assert!(slice.len() <= 8, "Bool slice must be at most 8 bools long, slice given is {} bools long", slice.len());
-
-    let mut byte:u8 = 0;
-
-    for i in 0..slice.len(){
-        if slice[i] {
-            byte |= 1 << (slice.len() - i - 1);
-        }
-    }
-
-    byte
-}
-
-pub fn bool_slice_to_u32(slice: &[bool]) -> u32 {
-    assert!(slice.len() <= 32, "Bool slice must be at most 32 bools long, slice given is {} bools long", slice.len());
-
-    let mut u_word:u32 = 0;
-
-    for i in 0..slice.len(){
-        if slice[i] {
-            u_word |= 1 << (slice.len() - i - 1);
-        }
-    }
-
-    u_word
-}
-
-pub fn bool_slice_to_usize(slice: &[bool]) -> usize {
-    assert!(slice.len() <= std::mem::size_of::<usize>() << 3, "Bool slice must be at most {} bools long, slice given is {} bools long", std::mem::size_of::<usize>() << 3, slice.len());
-
-    let mut size:usize = 0;
-
-    for i in 0..slice.len(){
-        if slice[i] {
-            size |= 1 << (slice.len() - i - 1);
-        }
-    }
-
-    size
 }

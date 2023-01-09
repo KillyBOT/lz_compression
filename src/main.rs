@@ -1,7 +1,3 @@
-//use std::{env, fs, time};
-use crate::huffman::{encode_bytes_huffman, decode_bytes_huffman};
-
-
 mod huffman;
 mod bitstream;
 
@@ -11,7 +7,7 @@ mod tests{
     use crate::huffman::{encode_bytes_huffman, decode_bytes_huffman};
     #[test]
     pub fn huffman_test(){
-        let contents = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        let contents = fs::read("enwik8").expect("File could not be opened and/or read");
 
         let start_time = time::Instant::now();
         let encoded_bytes = encode_bytes_huffman(&contents, 1<<18, 11);
@@ -34,7 +30,9 @@ mod tests{
 
 fn main() {
 
-    // use std::{fs,time};
+    //use std::{env, fs, time};
+    //use crate::huffman::{encode_bytes_huffman, decode_bytes_huffman};
+
 
     // let contents = fs::read("enwik8").expect("File could not be opened and/or read");
 

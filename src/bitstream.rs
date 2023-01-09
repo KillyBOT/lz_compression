@@ -59,6 +59,7 @@ impl<'a> BitReader<'a>{
 
         let bit = (self.bytes[self.bits_read >> 3] & (1 << (7 - (self.bits_read & 0b111)))) > 0;
         self.bits_read += 1;
+        
         Some(bit)
     }
     pub fn read_bits(&mut self, bit_num:usize) -> Option<Vec<bool>> {
@@ -107,8 +108,8 @@ impl BitWriter {
     // }
 
     pub fn write_bits_u32(&mut self, data: u32, bit_num:usize){
-        assert!(0 < bit_num && bit_num <= 32, "Number of bits must be between 1 and 32, given [{}] bits", bit_num);
-
+        assert!(bit_num <= 32, "Number of bits must less than 32, given [{}] bits", bit_num);
+        
         let mask = (1 << bit_num) - 1;
         self.buffer |= ((data & mask) as u64) << (64 - self.bits_written_to_buffer - bit_num);
         self.bits_written_to_buffer += bit_num;

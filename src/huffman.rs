@@ -1,11 +1,12 @@
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap};
 use std::cmp::{Ordering, min, max};
 use std::fmt::{self};
-use crate::bitstream::{BitStream};
+use crate::bitstream::{BitWriter, BitReader};
 
 const MAX_SYMBOLS:usize = 256;
 const MAX_SYMBOLS_SIZE:usize = 8;
 const MAX_CODE_LENGTH:i32 = 11;
+const CHUNK_SIZE:usize = 1 << 20;
 
 pub type HuffmanSymbol = u8;
 type HuffmanPath = u64;
@@ -133,7 +134,6 @@ impl HuffmanNode {
 }
 
 
-
 fn build_frequency_table(bytes: &[u8]) -> Vec<u64> {
     let mut freq_vec = Vec::with_capacity(MAX_SYMBOLS);
     freq_vec.resize(MAX_SYMBOLS, 0);
@@ -152,8 +152,6 @@ fn build_huffman_table(freq_table:&[u64]) -> HuffmanTable {
             node_heap.push(HuffmanNode::leaf(byte as u8, freq_table[byte]));
         }
     }
-
-    //println!("{:?}", node_heap);
 
     while node_heap.len() > 1{
         let left = node_heap.pop().unwrap();
@@ -190,7 +188,7 @@ fn limit_huffman_table_code_sizes(huffman_table: &mut [HuffmanTableData]){
     }
 }
 
-fn write_huffman_table(bitstream: &mut BitStream, huffman_table: &[HuffmanTableData]) {
+fn write_huffman_table(bitstream: &mut BitWriter, huffman_table: &[HuffmanTableData]) {
 
     assert!(huffman_table.len() <= MAX_SYMBOLS, "The given Huffman table has too many symbols");
 
@@ -233,23 +231,28 @@ fn build_huffman_code_map(huffman_table: &[HuffmanTableData]) -> HuffmanCodeMap{
     map
 }
 
-pub fn encode_bytes(bytes: &[u8]) -> BitStream {
-    let mut bitstream = BitStream::new();
-    let freq_table = build_frequency_table(bytes);
-    //println!("Frequency table generated");
-    let mut huffman_table = build_huffman_table(&freq_table);
-    //println!("Huffman table generated");
-    limit_huffman_table_code_sizes(&mut huffman_table);
-    //println!("Max levels decreased");
-    let map = build_huffman_code_map(&huffman_table);
-    //println!("Huffman codes generated");
+pub fn encode_bytes(bytes: &[u8]) -> BitWriter {
+    let mut bitstream = BitWriter::new();
 
-    write_huffman_table(&mut bitstream, &huffman_table);
-    //println!("Huffman table written");
+    for i in (0..bytes.len()).step_by(CHUNK_SIZE){
+        let chunk = &bytes[i..min(bytes.len(),i+CHUNK_SIZE)];
+        let chunk_size = min(CHUNK_SIZE, bytes.len() - i);
 
-    for byte in bytes{
-        let (code, length) = map[*byte as usize].unwrap();
-        bitstream.write_bits_u64(code, length);
+        let freq_table = build_frequency_table(chunk);
+        //println!("Frequency table generated");
+        let mut huffman_table = build_huffman_table(&freq_table);
+        //println!("Huffman table generated");
+        limit_huffman_table_code_sizes(&mut huffman_table);
+        //println!("Max levels decreased");
+        let map = build_huffman_code_map(&huffman_table);
+        //println!("Huffman codes generated");
+        bitstream.write_bits_u64(chunk_size as u64, 24);
+        write_huffman_table(&mut bitstream, &huffman_table);
+        //println!("Huffman table written");
+        for byte in chunk{
+            let (code, length) = map[*byte as usize].unwrap();
+            bitstream.write_bits_u64(code, length);
+        }
     }
     //println!("File encoded");
 

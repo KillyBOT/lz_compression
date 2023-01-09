@@ -1,16 +1,20 @@
 use std::fmt::{self};
 
 
-pub struct BitStream {
+pub struct BitWriter {
     bits_written:usize,
-    bits_read:usize,
     buffer:u64,
     bits_remaining:usize,
     bytes:Vec<u8>
 }
 
+pub struct BitReader {
+    bits_read:usize,
+    num_of_bits:usize,
+    bytes:Vec<u8>
+}
 
-impl fmt::Display for BitStream {
+impl fmt::Display for BitWriter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 
         // match &self.data {
@@ -18,65 +22,91 @@ impl fmt::Display for BitStream {
         //     HuffmanNodeData::Leaf(symbol) => write!(f, "Frequency:[{}] Symbol:[{:x}]", self.freq, symbol)
         // }
         let mut repr:String = String::new();
-        repr.push_str(format!("Bits written:[{}] Bits read:[{}]\n", self.bits_written, self.bits_read).as_str());
-        for i in self.bytes_read()..self.bytes_written(){
+        repr.push_str(format!("Bits written:[{}]\n", self.bits_written).as_str());
+        for i in 0..self.bytes_written(){
             let byte = self.bytes[i];
             repr.push_str(format!("{:08b} ",byte).as_str());
         }
 
         for i in (0..(64 - self.bits_remaining)).rev(){
             repr.push_str(format!("{}",(self.buffer >> i) & 1).as_str());
+            if i > 0 && (i % 8) == 0{
+                repr.push_str(" ");
+            }
         }
-
 
         write!(f,"{}",repr)
         
     }
 }
 
-impl Iterator for BitStream {
-    type Item = u8;
+impl Iterator for BitReader{
+    type Item = bool;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.bits_read < self.bits_written {
-            let last_byte = self.bytes[self.bytes_read()];
-            let bits_left = 7 - ((self.bits_read) & 0b111);
-            self.bits_read += 1;
-            return Some( (last_byte >> bits_left) & 1 );
+        if self.bits_read >= self.num_of_bits{
+            return None
         }
+        let byte = self.bytes_read();
+        let shift = 7 - (self.bits_read & 0b111);
+        self.bits_read += 1;
 
-        None
+        Some(((self.bytes[byte] >> shift) & 1) == 1)
     }
 }
 
-impl BitStream {
-    pub fn new() -> Self{
-        BitStream { bits_written: 0, bits_read: 0, buffer:0, bits_remaining:64, bytes: Vec::new()}
+impl BitReader {
+    pub fn new(bytes: &[u8], num_of_bits: usize) -> Self {
+        BitReader { bits_read: 0, num_of_bits: num_of_bits, bytes: bytes.to_vec() }
     }
-
-    // pub fn from_bytes(bytes: &[u8]) -> Self {
-    //     BitStream { bits_written: 8 * bytes.len(), bits_read: 0, buffer:0, bits_remaining:64, bytes: bytes.to_vec()}
-    // }
 
     pub fn bytes_read(&self) -> usize {
         self.bits_read >> 3
     }
+}
+
+impl BitWriter {
+    pub fn new() -> Self{
+        BitWriter { bits_written: 0, buffer:0, bits_remaining:64, bytes: Vec::new()}
+    }
+
+    // pub fn from_bytes(bytes: &[u8]) -> Self {
+    //     BitWriter { bits_written: 8 * bytes.len(), bits_read: 0, buffer:0, bits_remaining:64, bytes: bytes.to_vec()}
+    // }
     
     pub fn bytes_written(&self) -> usize {
         self.bits_written >> 3
     }
 
     fn flush(&mut self) {
+        if self.bits_remaining < 64{
+            let bytes_written_to_buffer = ((63 - self.bits_remaining) >> 3) + 1; //floor((x-1)/8)+1, x = # of bits written
 
-        if self.bits_remaining < 64 {
-            self.buffer <<= self.bits_remaining;
-            self.bits_written += self.bits_remaining;
+            if self.bits_remaining < 64 {
+                self.buffer <<= self.bits_remaining;
+            }
+
+            let bytes_in_buffer = self.buffer.to_be_bytes();
+            for byte in &bytes_in_buffer[0..bytes_written_to_buffer]{
+                self.bytes.push(*byte);
+                self.bits_written += 8;
+            }
+
+            self.buffer = 0;
+            self.bits_remaining = 64;
         }
-        for i in (0..self.bits_remaining).step_by(8).rev(){
-            self.bytes.push( (self.buffer >> i) as u8);
+    }
+
+
+    pub fn write_bit(&mut self, bit: bool) {
+        self.buffer <<= 1;
+        self.buffer |= if bit {1} else {0};
+        self.bits_written += 1;
+        self.bits_remaining -= 1;
+
+        if self.bits_remaining == 0{
+            self.flush();
         }
-        self.buffer = 0;
-        self.bits_remaining = 64;
     }
 
     pub fn write_bits_u64(&mut self, data: u64, bit_num:usize){
@@ -100,10 +130,13 @@ impl BitStream {
         }
     }
 
+    pub fn get_bytes(&self) -> (Vec<u8>, usize) {
+        (self.bytes.clone(), self.bits_written)
+    }
+
     // pub fn write_bytes(&mut self, bytes: &Vec<u8>) {
     //     self.bits_written += bytes.len() * 8;
     //     self.bytes.extend(bytes);
     // }
 
 }
-

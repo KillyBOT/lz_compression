@@ -62,7 +62,7 @@ impl<'a> BitReader<'a>{
             self.bytes = &self.bytes[1..];
             self.bits_in_buffer += 8;
             self.unused_bits_in_buffer -= 8;
-            self.buffer |= ((byte as u64) << self.unused_bits_in_buffer);
+            self.buffer |= (byte as u64) << self.unused_bits_in_buffer;
         }
     }
 
@@ -88,6 +88,8 @@ impl<'a> BitReader<'a>{
 
         if bit_num > self.remaining_bits() {
             return None;
+        } else if bit_num == 0 {
+            return Some(0);
         }
 
         let bits = (self.buffer >> (64 - bit_num)) as u8;
@@ -105,6 +107,8 @@ impl<'a> BitReader<'a>{
 
         if bit_num > self.remaining_bits() {
             return None;
+        } else if bit_num == 0 {
+            return Some(0);
         }
 
         let bits = (self.buffer >> (64 - bit_num)) as u32;
@@ -115,41 +119,6 @@ impl<'a> BitReader<'a>{
 
         Some(bits)
     }
-
-    // pub fn read_bits_into_usize(&mut self, bit_num:usize) -> Option<u8> {
-
-    //     let usize_bit_size = std::mem::size_of::<usize>() << 3;
-    //     assert!(bit_num <= usize_bit_size, "Can only read up to [{}] bits, attempted to read [{}] bits", usize_bit_size, bit_num);
-
-    //     if bit_num > self.remaining_bits() {
-    //         return None;
-    //     }
-
-    //     let bits = (self.buffer >> (64 - bit_num)) as u8;
-    //     self.buffer <<= bit_num;
-    //     self.bits_in_buffer -= bit_num;
-    //     self.unused_bits_in_buffer += bit_num;
-    //     self.refill();
-
-    //     Some(bits)
-    // }
-
-    // pub fn read_bits(&mut self, bit_num:usize) -> Option<Vec<bool>> {
-
-    //     if self.bits_read == self.bytes.len() << 3{
-    //         return None;
-    //     }
-
-    //     let mut bool_vec = Vec::with_capacity(bit_num);
-
-    //     for _ in 0..bit_num{
-    //         if let Some(bit) = self.read_bit() {
-    //             bool_vec.push(bit);
-    //         }
-    //     }
-
-    //     Some(bool_vec)
-    // }
 
 }
 

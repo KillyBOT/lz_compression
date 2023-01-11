@@ -1,6 +1,6 @@
 mod huffman;
 mod bitstream;
-mod lz;
+mod lzw;
 
 fn main() {
 

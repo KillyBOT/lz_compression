@@ -549,7 +549,6 @@ impl HuffmanEncoder {
                 code += 1;
             }
 
-            //let reversed_code = reverse_u32(code);
             self.code_map[symbol as usize] = Some((code, level as usize));
         }
 
@@ -568,11 +567,11 @@ impl HuffmanEncoder {
         }
     }
 
-    /// Encodes a single given symbol. If the symbol has no code, nothing
-    /// happens.
+    /// Encodes a single given symbol. `panic`s if the symbol isn't in the code
+    /// map, which should never happen.
     /// 
-    /// WARNING: This does not add proper padding, so I would advise not using
-    /// it unless you know what you're doing. Instead, use `encode_symbols`.
+    /// WARNING: After encoding symbols, remember to `finish` the encoder to 
+    /// add the proper padding!
     pub fn encode_symbol(&mut self, symbol:HuffmanSymbol) {
         if let Some((code, length)) = self.code_map[symbol as usize]{
             self.writer.write_bits_u32(code, length);
@@ -582,7 +581,10 @@ impl HuffmanEncoder {
         }
     }
 
-    /// Encodes a slice of symbols. Also adds padding.
+    /// Encodes a slice of symbols.
+    /// 
+    /// WARNING: After encoding symbols, remember to `finish` the encoder to
+    /// add the proper padding!
     pub fn encode_symbols(&mut self, symbols: &[HuffmanSymbol]) {
         self.writer_mut().write_bits_u32(symbols.len() as u32, CHUNK_SIZE_BITS);
 
@@ -605,12 +607,13 @@ impl HuffmanEncoder {
         &self.writer
     }
 
-    /// Returns a reference to the encoder's `BitWriter`
+    /// Returns a mutable reference to the encoder's `BitWriter`
     pub fn writer_mut(&mut self) -> &mut BitWriter{
         &mut self.writer
     }
 
-    /// Get the encoded bytes of the Huffman encoder's writer
+    /// Get the encoded bytes of the Huffman encoder's writer. Do this
+    /// after `finish`ing the encoder to make sure padding is present.
     pub fn encoded_bytes(&self) -> Vec<u8> {
         self.writer().get_bytes()
     }
@@ -753,7 +756,7 @@ impl<'a> HuffmanDecoder<'a> {
 /// larger `max_path_size`s results in decompression taking up much more space.
 /// Therefore, it's advised to make `max_path_size` as small as possible.
 /// If you're unsure what to set this to, I've found that `11` is a good length.
-pub fn encode_bytes_huffman(bytes: &[u8], chunk_size:usize, max_path_size:i32) -> Vec<u8> {
+pub fn compress_huffman(bytes: &[u8], chunk_size:usize, max_path_size:i32) -> Vec<u8> {
 
     let mut encoder = HuffmanEncoder::new(bytes, MAX_SYMBOLS, max_path_size as usize);
 
@@ -794,9 +797,9 @@ pub fn encode_bytes_huffman(bytes: &[u8], chunk_size:usize, max_path_size:i32) -
 ///Decodes a slice of bytes encoded using Huffman encoding.
 /// 
 /// WARNING: I don't know what this does if the encoded bytes weren't created
-/// using my `encode_bytes_huffman` function. Therefore, I'd advise you don't
+/// using my `compress_huffman` function. Therefore, I'd advise you don't
 /// use it on anything not created using this function.
-pub fn decode_bytes_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
+pub fn decompress_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
     let mut decoder = HuffmanDecoder::new(encoded_bytes);
 
     while decoder.reader().remaining_bits() > CHUNK_SIZE_BITS {
@@ -819,17 +822,17 @@ mod tests{
 
     fn huffman_test(chunk_size: usize, max_path_size:i32){
         use std::{fs, time};
-        use crate::huffman::{encode_bytes_huffman, decode_bytes_huffman};
+        use crate::huffman::{compress_huffman, decompress_huffman};
         let contents = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
 
         let start_time = time::Instant::now();
-        let encoded_bytes = encode_bytes_huffman(&contents, chunk_size, max_path_size);
+        let encoded_bytes = compress_huffman(&contents, chunk_size, max_path_size);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
         
         let start_time = time::Instant::now();
-        let decoded_bytes = decode_bytes_huffman(&encoded_bytes);
+        let decoded_bytes = decompress_huffman(&encoded_bytes);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));

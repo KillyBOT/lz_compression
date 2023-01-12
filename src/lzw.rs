@@ -1,66 +1,117 @@
 use crate::bitstream::{BitReader, BitWriter};
 use crate::huffman::{HuffmanSymbol, HuffmanPath, compress_huffman, decompress_huffman};
+use std::char::MAX;
 use std::collections::HashMap;
-use std::f32::MIN;
-use std::hash::Hash;
-
-type MatchLength = u32;
-type MatchOffset = u32;
 
 const MIN_CODE_LEN:usize = 9;
 const MAX_CODE_LEN:usize = 12;
-const MAX_CODE:u32 = 1 << MAX_CODE_LEN;
-const CLEAR_CODE:u32 = 256;
-const EOD_CODE:u32 = 257;
-const START_CODE:u32 = 258;
+const MAX_CODE:u16 = 1 << MAX_CODE_LEN;
+const CLEAR_CODE:u16 = 256;
+const EOD_CODE:u16 = 257;
+const START_CODE:u16 = 258;
 
-struct LZMatchFinder<'a> {
-    bytes:&'a [u8],
-    hash_map:Vec<usize>,
-    hash_chain:Vec<usize>
+#[derive(Clone)]
+struct LZWECompressionTableData {
+    next: Vec<Option<u16>>
+}
+#[derive(Clone, Copy)]
+struct LZWEDecompressionTableData {
+    prev: u16,
+    back: u16,
+    byte: u8
 }
 
-fn fast_log2_u32(v:u32) -> u32 {
-    if v == 0 {return 0;}
-
-    31 - v.leading_zeros()
-}
-
-/// Creates a `HuffmanSymbol` given a `MatchLength`.
-/// The symbol is just equal to the length if the length is less than
-/// 16, and equal to 12 + log2(length) if greater. This allows for more compact
-/// symbols, as long as you also denote the extra bits using 
-/// `extra_bits_from_length`, since 
-fn huffman_symbol_from_length(length: MatchLength) -> HuffmanSymbol {
-    if length < 16 {
-        return length as HuffmanSymbol;
+impl LZWECompressionTableData {
+    fn new() -> Self {
+        LZWECompressionTableData { next: vec![None; 256] }
     }
-
-    (12 + fast_log2_u32(length)) as HuffmanSymbol
 }
 
-fn extra_bits_from_length(length: MatchLength) -> HuffmanSymbol {
-    (length - (1 << fast_log2_u32(length))) as HuffmanSymbol
+impl LZWEDecompressionTableData {
+    fn new() -> Self {
+        LZWEDecompressionTableData { prev:0, back:0, byte: 0}
+    }
 }
 
-fn huffman_symbol_from_offset(offset: MatchOffset) -> HuffmanSymbol {
-    if offset < 2 {return offset as HuffmanSymbol;}
-
-    (1 + fast_log2_u32(offset)) as HuffmanSymbol
-}
-
-fn init_lzw_compression_table(map: &mut HashMap<Vec<u8>,u32>) {
-    map.clear();
+fn init_lzw_compression_table(table: &mut HashMap<Vec<u8>,u16>) {
+    table.clear();
     for byte in 0..=255{
-        map.insert(vec![byte], byte as u32);
+        table.insert(vec![byte], byte as u16);
     }
 }
-fn init_lzw_decompression_table(map: &mut HashMap<u32,Vec<u8>>) {
-    map.clear();
+fn init_lzw_decompression_table(table: &mut HashMap<u16,Vec<u8>>) {
+    table.clear();
     for byte in 0..=255{
-        map.insert( byte as u32,vec![byte]);
+        table.insert( byte as u16,vec![byte]);
     }
 }
+fn new_lzw_decompression_table()-> Vec<LZWEDecompressionTableData>{
+    let mut table = vec![LZWEDecompressionTableData::new(); MAX_CODE as usize];
+    for i in 0..=255{
+        table[i as usize].byte = i;
+    }
+
+    table
+}
+/* 
+/// Very simple LZW compression.
+/// 
+/// I only made this to get a better understanding of how LZW encoding works.
+/// 
+/// In the event of a table overflow, the GIF approach of remaking the table is
+/// used.
+pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
+    let mut writer = BitWriter::new();
+    let mut code_len:usize = MIN_CODE_LEN;
+    let mut curr_max_code:u16 = 1 << MIN_CODE_LEN;
+    let mut table:HashMap<Vec<u8>,u16> = HashMap::with_capacity(MAX_CODE as usize);
+
+    init_lzw_compression_table(&mut table);
+
+    let mut code = START_CODE;
+    let mut buffer = Vec::new();
+
+    for byte in bytes{
+        let byte = *byte;
+        let mut buffer_new = buffer.clone();
+        buffer_new.push(byte);
+
+        if table.contains_key(&buffer_new){
+            buffer = buffer_new;
+        } else {
+            writer.write_bits_u16(*table.get(&buffer).unwrap(),code_len);
+            table.insert(buffer_new, code);
+
+            buffer.clear();
+            buffer.push(byte);
+
+            code += 1;
+
+            if code > curr_max_code {
+
+                code_len += 1;
+                curr_max_code <<= 1;
+
+                if code_len > MAX_CODE_LEN {
+                    writer.write_bits_u16(CLEAR_CODE, code_len);
+                
+                    code_len = MIN_CODE_LEN;
+                    curr_max_code = 1 << MIN_CODE_LEN;
+                    code = START_CODE;
+                    init_lzw_compression_table(&mut table);
+                }
+            }
+        }
+    }
+    if !buffer.is_empty(){
+        writer.write_bits_u16(*table.get(&buffer).unwrap(),code_len);
+    }
+
+    writer.write_bits_u16(EOD_CODE, code_len);
+
+    writer.get_bytes()
+}
+*/
 
 /// Very simple LZW compression.
 /// 
@@ -68,53 +119,50 @@ fn init_lzw_decompression_table(map: &mut HashMap<u32,Vec<u8>>) {
 /// 
 /// In the event of a table overflow, the GIF approach of remaking the table is
 /// used.
-pub fn compress_lzw_simple(bytes: &[u8]) -> Vec<u8> {
+pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
     let mut writer = BitWriter::new();
     let mut code_len:usize = MIN_CODE_LEN;
-    let mut curr_max_code:u32 = 1 << MIN_CODE_LEN;
-    let mut map:HashMap<Vec<u8>,u32> = HashMap::with_capacity(MAX_CODE as usize);
+    let mut curr_max_code:u16 = 1 << MIN_CODE_LEN;
+    let mut table = vec![LZWECompressionTableData::new(); MAX_CODE as usize];
 
-    init_lzw_compression_table(&mut map);
+    let mut code = bytes[0] as u16;
+    let mut next_code = START_CODE;
+    
+    for byte in &bytes[1..] {
+        let byte = *byte;
+        
+        let next_option = table[code as usize].next[byte as usize];
 
-    let mut code:u32 = START_CODE;
-    let mut buffer = Vec::new();
+        if let Some(next) = next_option{
+            code = next;
 
-    for byte in bytes{
-        let mut buffer_new = buffer.clone();
-        buffer_new.push(*byte);
-
-        if map.contains_key(&buffer_new){
-            buffer = buffer_new;
         } else {
-            writer.write_bits_u32(*map.get(&buffer).unwrap(),code_len);
-            map.insert(buffer_new, code);
+            //println!("{code}");
+            writer.write_bits_u16(code, code_len);
+            table[code as usize].next[byte as usize] = Some(next_code);
+            code = byte as u16;
 
-            buffer.clear();
-            buffer.push(*byte);
+            next_code += 1;
 
-            code += 1;
-
-            if code > curr_max_code {
-                
+            if next_code == curr_max_code {
                 code_len += 1;
                 curr_max_code <<= 1;
-
-                if code_len > MAX_CODE_LEN {
-                    writer.write_bits_u32(CLEAR_CODE, code_len);
-                
+                //println!("Increasing code length to {code_len}");
+                if code_len == MAX_CODE_LEN {
+                    writer.write_bits_u16(CLEAR_CODE, code_len);
+                    
                     code_len = MIN_CODE_LEN;
                     curr_max_code = 1 << MIN_CODE_LEN;
-                    code = START_CODE;
-                    init_lzw_compression_table(&mut map);
+                    next_code = START_CODE;
+
+                    table.fill(LZWECompressionTableData::new());
                 }
             }
         }
     }
-    if !buffer.is_empty(){
-        writer.write_bits_u32(*map.get(&buffer).unwrap(),code_len);
-    }
 
-    writer.write_bits_u32(EOD_CODE, code_len);
+    writer.write_bits_u16(code,code_len);
+    writer.write_bits_u16(EOD_CODE, code_len);
 
     writer.get_bytes()
 }
@@ -125,12 +173,12 @@ pub fn compress_lzw_simple(bytes: &[u8]) -> Vec<u8> {
 /// 
 /// In the event of a table overflow, the GIF approach of remaking the table is
 /// used.
-pub fn compress_lzw_simple_as_bytes(bytes: &[u8]) -> Vec<u32> {
+pub fn compress_lzw_as_bytes(bytes: &[u8]) -> Vec<u16> {
     let mut codes = Vec::new();
-    let mut map:HashMap<Vec<u8>,u32> = HashMap::with_capacity(1 << MAX_CODE_LEN);
+    let mut map:HashMap<Vec<u8>,u16> = HashMap::with_capacity(1 << MAX_CODE_LEN);
     init_lzw_compression_table(&mut map);
 
-    let mut code:u32 = START_CODE;
+    let mut code:u16 = START_CODE;
     let mut buffer = Vec::new();
 
     for byte in bytes{
@@ -184,19 +232,22 @@ Increasing code length to 10
 116
 436
 269 */
+
+/*
 /// Very stupid LZW decompression.
 /// 
 /// I only made this to get a better understanding of how LZW encoding works.
 /// 
 /// This uses the GIF method of starting over when the table gets too big.
-pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
+/// /
+pub fn decompress_lzw(encoded_bytes: &[u8]) -> Vec<u8> {
     let mut reader = BitReader::new(encoded_bytes);
     let mut decoded_bytes = Vec::new();
 
     let mut code_len = MIN_CODE_LEN;
-    let mut curr_max_code:u32 = 1 << MIN_CODE_LEN;
+    let mut curr_max_code:u16 = 1 << MIN_CODE_LEN;
 
-    let mut table:HashMap<u32, Vec<u8>> = HashMap::with_capacity(MAX_CODE as usize);
+    let mut table:HashMap<u16, Vec<u8>> = HashMap::with_capacity(MAX_CODE as usize);
     init_lzw_decompression_table(&mut table);
 
     let mut prev = CLEAR_CODE;
@@ -205,8 +256,8 @@ pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
 
     loop {
 
-        let curr = reader.read_bits_into_u32(code_len).unwrap();
-
+        let curr = reader.read_bits_into_u16(code_len).unwrap();
+        //println!("{curr}");
         if prev == CLEAR_CODE {
             prev = curr;
             entry = table.get(&prev).unwrap().clone();
@@ -245,9 +296,10 @@ pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
                 table.insert(code, [table.get(&prev).unwrap().clone(),vec![entry[0]]].concat());
                 code += 1;
 
-                if code == curr_max_code{ 
+                if code == curr_max_code - 1{ 
                     curr_max_code <<= 1;
                     code_len += 1;
+                    //println!("Increasing code length to {code_len}");
                 }
             }
         }
@@ -258,13 +310,77 @@ pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
 
     decoded_bytes
 }
+*/
+pub fn decompress_lzw(encoded_bytes: &[u8]) -> Vec<u8> {
+    let mut reader = BitReader::new(encoded_bytes);
+    let mut decoded_bytes = Vec::new();
 
-pub fn decompress_lzw_simple_as_bytes(codes: &[u32]) -> Vec<u8> {
+    let mut code_len = MIN_CODE_LEN;
+    let mut curr_max_code:u16 = 1 << MIN_CODE_LEN;
+
+    let mut table = new_lzw_decompression_table();
+
+    let mut next_code = START_CODE;
+
+    loop {
+        let code = reader.read_bits_into_u16(code_len).unwrap();
+
+        if code == EOD_CODE { 
+            break; 
+        }
+        if code == CLEAR_CODE {
+            table = new_lzw_decompression_table();
+            code_len = MIN_CODE_LEN;
+            curr_max_code = 1 << MIN_CODE_LEN;
+            next_code = START_CODE;
+            continue;
+        }
+
+        if code >= next_code {
+            panic!("Bad compression with symbol {code}");
+        }
+
+        let mut curr = code;
+        table[next_code as usize].prev = code;
+
+        //While the current code isn't a byte
+        while curr >= 256 {
+            let tmp = table[curr as usize].prev;
+            table[tmp as usize].back = curr;
+            curr = tmp;
+        }
+
+        table[(next_code as usize) - 1].byte = curr as u8;
+
+        while table[curr as usize].back > 0{
+            decoded_bytes.push(table[curr as usize].byte);
+            let tmp = table[curr as usize].back;
+            table[curr as usize].back = 0;
+            curr = tmp;
+        }
+
+        decoded_bytes.push(table[curr as usize].byte);
+
+        next_code += 1;
+        if next_code >= curr_max_code {
+            code_len += 1;
+            curr_max_code <<= 1;
+        }
+
+
+
+    }
+
+    decoded_bytes
+}
+
+
+pub fn decompress_lzw_as_bytes(codes: &[u16]) -> Vec<u8> {
     let mut decoded_bytes = Vec::new();
     let mut code_len = MIN_CODE_LEN;
-    let mut curr_max_code:u32 = 1 << MIN_CODE_LEN;
+    let mut curr_max_code:u16 = 1 << MIN_CODE_LEN;
 
-    let mut table:HashMap<u32, Vec<u8>> = HashMap::with_capacity(1 << MAX_CODE_LEN);
+    let mut table:HashMap<u16, Vec<u8>> = HashMap::with_capacity(1 << MAX_CODE_LEN);
     init_lzw_decompression_table(&mut table);
 
     let mut prev = CLEAR_CODE;
@@ -335,27 +451,20 @@ pub fn decompress_lzw_simple_as_bytes(codes: &[u32]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests{
-    #[test]
-    pub fn fast_log2_u32_test() {
-        for num in [97758u32, 93658u32, 86636u32, 2623u32, 75343u32, 46835u32, 88189u32, 52233u32, 3907u32, 64476u32, 12861u32, 46261u32, 60695u32, 38029u32, 61168u32, 77655u32, 97815u32, 49371u32, 49118u32, 29138u32, 16451u32, 1607u32, 10663u32, 93815u32, 75146u32, 42807u32, 68381u32, 1063u32, 4990u32, 63744u32, 10137u32, 43254u32, 21171u32, 83417u32, 33270u32, 40106u32, 64128u32, 53782u32, 85183u32, 44082u32, 25309u32, 30617u32, 21117u32, 38969u32, 17873u32, 65888u32, 36684u32, 92196u32, 87049u32, 6080u32, 32493u32, 58124u32, 48669u32, 99194u32, 85970u32, 12357u32, 91229u32, 6132u32, 97989u32, 84058u32, 37744u32, 4562u32, 59294u32, 65236u32, 16571u32, 56115u32, 73037u32, 35545u32, 41656u32, 42748u32, 31338u32, 77068u32, 44765u32, 15301u32, 96648u32, 65541u32, 54921u32, 17102u32, 96644u32, 94647u32, 79280u32, 1456u32, 87750u32, 56138u32, 37030u32, 93057u32, 97301u32, 96730u32, 82814u32, 41527u32, 56546u32, 53109u32, 18328u32, 38914u32, 55667u32, 75697u32, 35198u32, 17457u32, 42311u32, 97125u32] {
-            assert!((num as f32).log2().floor() as u32 == crate::lzw::fast_log2_u32(num));
-        }
-    }
 
     #[test]
-    pub fn lzw_simple_as_bytes_test() {
-        use crate::lzw::{compress_lzw_simple_as_bytes, decompress_lzw_simple_as_bytes};
+    pub fn lzw_as_bytes_test() {
+        use crate::lzw::{compress_lzw_as_bytes, decompress_lzw_as_bytes};
         use std::{fs, time};
         let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         //let bytes = "TOBEORNOTTOBEORTOBEORNOT".as_bytes();
         let start_time = time::Instant::now();
-        let encoded_bytes = compress_lzw_simple_as_bytes(&bytes);
+        let encoded_bytes = compress_lzw_as_bytes(&bytes);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",bytes.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (bytes.len() as f32), elapsed_time, ((bytes.len() as f32) / 1000f32) / (elapsed_time as f32));
-        //println!("{encoded_bytes:?}");
         let start_time = time::Instant::now();
-        let decoded_bytes = decompress_lzw_simple_as_bytes(&encoded_bytes);
+        let decoded_bytes = decompress_lzw_as_bytes(&encoded_bytes);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));
@@ -366,26 +475,26 @@ mod tests{
     }
 
     #[test]
-    pub fn lzw_simple_test() {
-        use crate::lzw::{compress_lzw_simple, decompress_lzw_simple};
+    pub fn lzw_test() {
+        use crate::lzw::{compress_lzw, decompress_lzw};
         use std::{fs, time};
         use rand::prelude::*;
         
-        let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        let bytes = fs::read("enwik8").expect("File could not be opened and/or read");
         //let bytes = "TOBEORNOTTOBEORTOBEORNOT".as_bytes();
-        // let byte_num = 8192;
+        // let byte_num = 4096;
         // let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(2123);
         // let mut bytes = Vec::with_capacity(byte_num);
         // for _ in 0..byte_num {bytes.push(rng.gen::<u8>());}
 
         let start_time = time::Instant::now();
-        let encoded_bytes = compress_lzw_simple(&bytes);
+        let encoded_bytes = compress_lzw(&bytes);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",bytes.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (bytes.len() as f32), elapsed_time, ((bytes.len() as f32) / 1000f32) / (elapsed_time as f32));
         //println!("{encoded_bytes:?}");
         let start_time = time::Instant::now();
-        let decoded_bytes = decompress_lzw_simple(&encoded_bytes);
+        let decoded_bytes = decompress_lzw(&encoded_bytes);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));

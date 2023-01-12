@@ -111,6 +111,37 @@ impl<'a> BitReader<'a>{
         Some(bits)
     }
 
+    pub fn read_bits_into_u16(&mut self, bit_num:usize) -> Option<u16> {
+
+        assert!(bit_num <= 16, "Can only read up to 16 bits, attempted to read [{}] bits", bit_num);
+        let remaining_bits = self.remaining_bits();
+        //print!("Before read: ");
+        //self.print_buffer();
+
+        if remaining_bits == 0{
+            return None;
+        } else if bit_num > remaining_bits{
+            return self.read_bits_into_u16(remaining_bits);
+        } else if bit_num == 0 {
+            return Some(0);
+        }
+
+        let bits = (self.buffer >> (64 - bit_num)) as u16;
+        self.buffer <<= bit_num;
+        self.bits_in_buffer -= bit_num;
+        self.unused_bits_in_buffer += bit_num;
+
+        //print!("Before refill: ");
+        //self.print_buffer();
+
+        self.refill();
+
+        //print!("After refill: ");
+        //self.print_buffer();
+
+        Some(bits)
+    }
+
     pub fn read_bits_into_u32(&mut self, bit_num:usize) -> Option<u32> {
 
         assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
@@ -177,6 +208,14 @@ impl BitWriter {
         }
     }
 
+    pub fn write_bits_u16(&mut self, data: u16, bit_num:usize){
+        assert!(bit_num <= 16, "Number of bits must less than 32, given [{}] bits", bit_num);
+        
+        let mask = if bit_num == 16 {u16::MAX} else {(1 << bit_num) - 1};
+        self.buffer |= ((data & mask) as u64) << (64 - self.bits_written_to_buffer - bit_num);
+        self.bits_written_to_buffer += bit_num;
+        self.flush();
+    }
     pub fn write_bits_u32(&mut self, data: u32, bit_num:usize){
         assert!(bit_num <= 32, "Number of bits must less than 32, given [{}] bits", bit_num);
         

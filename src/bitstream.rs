@@ -64,6 +64,16 @@ impl<'a> BitReader<'a>{
             self.unused_bits_in_buffer -= 8;
             self.buffer |= (byte as u64) << self.unused_bits_in_buffer;
         }
+        //println!("Bits in buffer: {}", self.bits_in_buffer);
+    }
+
+    fn print_buffer(&self) {
+        let mut mask:u64 = 1 << 63;
+        for i in 0..self.bits_in_buffer{
+            print!("{}", if mask & self.buffer > 0 {1} else {0});
+            mask >>= 1;
+        }
+        println!(" Size: {}", self.bits_in_buffer);
     }
 
     pub fn read_bit(&mut self) -> Option<bool> {
@@ -104,9 +114,14 @@ impl<'a> BitReader<'a>{
     pub fn read_bits_into_u32(&mut self, bit_num:usize) -> Option<u32> {
 
         assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
+        let remaining_bits = self.remaining_bits();
+        //print!("Before read: ");
+        //self.print_buffer();
 
-        if bit_num > self.remaining_bits() {
+        if remaining_bits == 0{
             return None;
+        } else if bit_num > remaining_bits{
+            return self.read_bits_into_u32(remaining_bits);
         } else if bit_num == 0 {
             return Some(0);
         }
@@ -115,9 +130,32 @@ impl<'a> BitReader<'a>{
         self.buffer <<= bit_num;
         self.bits_in_buffer -= bit_num;
         self.unused_bits_in_buffer += bit_num;
+
+        //print!("Before refill: ");
+        //self.print_buffer();
+
         self.refill();
 
+        //print!("After refill: ");
+        //self.print_buffer();
+
         Some(bits)
+    }
+
+    pub fn peek_bits_into_u32(&mut self, bit_num:usize) -> Option<u32> {
+
+        assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
+        let remaining_bits = self.remaining_bits();
+
+        if remaining_bits == 0 {
+            return None;
+        } else if bit_num > remaining_bits{
+            return self.peek_bits_into_u32(remaining_bits);
+        } else if bit_num == 0 {
+            return Some(0);
+        }
+            
+        Some((self.buffer >> (64 - bit_num)) as u32)
     }
 
 }
@@ -142,7 +180,7 @@ impl BitWriter {
     pub fn write_bits_u32(&mut self, data: u32, bit_num:usize){
         assert!(bit_num <= 32, "Number of bits must less than 32, given [{}] bits", bit_num);
         
-        let mask = (1 << bit_num) - 1;
+        let mask = if bit_num == 32 {u32::MAX} else {(1 << bit_num) - 1};
         self.buffer |= ((data & mask) as u64) << (64 - self.bits_written_to_buffer - bit_num);
         self.bits_written_to_buffer += bit_num;
         self.flush();
@@ -157,4 +195,40 @@ impl BitWriter {
         bytes.clone()
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bitstream::{BitWriter, BitReader};
+
+    #[test]
+    fn bit_reader_writer_test() {
+        use rand::prelude::*;
+
+        let val_num = 8192;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(2123);
+
+        let mut bit_num:usize = 0;
+        let mut vals:Vec<u32> = Vec::with_capacity(val_num);
+        let mut val_sizes:Vec<usize> = Vec::with_capacity(val_num);
+        for _ in 0..val_num{
+            let rand_len:usize = rng.gen_range(1..=32);
+            let mask:u32 = if rand_len == 32 {u32::MAX} else {(1 << rand_len) - 1};
+            let rand_val:u32 = rng.gen::<u32>() & mask;
+            vals.push(rand_val);
+            val_sizes.push(rand_len);
+        }
+
+        let mut writer = BitWriter::new();
+        for i in 0..val_num{
+            writer.write_bits_u32(vals[i], val_sizes[i]);
+        }
+        let bytes = writer.get_bytes();
+
+        let mut reader = BitReader::new(&bytes);
+        for i in 0..val_num{
+            let read_val = reader.read_bits_into_u32(val_sizes[i]).unwrap();
+            assert!(read_val == vals[i], "Val at position [{i}] was read/written incorrectly, {read_val} -> {}",vals[i]);
+        }
+    }
 }

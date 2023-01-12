@@ -176,213 +176,6 @@ impl HuffmanNode {
     }
 
 }
-/*
-/// Builds a frequency table given a slice of bytes.
-/// 
-/// `build_frequency_table(&bytes)[i]` denotes the number of times the symbol
-/// `i` appears in `bytes`.
-fn build_frequency_table(bytes: &[u8]) -> Vec<u64> {
-    let mut freq_vec = Vec::with_capacity(MAX_SYMBOLS);
-    freq_vec.resize(MAX_SYMBOLS, 0);
-
-    for byte in bytes{
-        freq_vec[*byte as usize] += 1;
-    }
-
-    freq_vec
-}
-
-fn scan_byte(freq_table: &mut [u8], byte:u8) {
-    freq_table[byte as usize] += 1;
-}
-
-/// Builds a huffman table.
-/// 
-/// Creates a frequency table using `build_frequency_table()`, builds a Huffman
-/// tree out of `HuffmanNode`s using the frequency table with a `BinaryHeap`, 
-/// then turns that huffman tree into a `HuffmanTable`.
-fn build_huffman_table(freq_table:&[u64]) -> HuffmanTable {
-    let mut node_heap:BinaryHeap<HuffmanNode> = BinaryHeap::new();
-    for byte in 0..256 {
-        if freq_table[byte] > 0{
-            node_heap.push(HuffmanNode::leaf(byte as u8, freq_table[byte]));
-        }
-    }
-
-    while node_heap.len() > 1{
-        let left = node_heap.pop().unwrap();
-        let right = node_heap.pop().unwrap();
-        node_heap.push(HuffmanNode::node(left, right));
-    }
-
-    node_heap.pop().unwrap().leaves()
-}
-
-/// Prints the given `HuffmanTable`
-fn print_huffman_table(huffman_table: &HuffmanTable) {
-    for data in huffman_table{
-        println!("Symbol: [{:x}] Level: [{}]", data.symbol, data.level);
-    }
-}
-/// Limits the maximum levels of the symbols in the `HuffmanTable`, increasing
-/// and decreasing the levels of symbols accordingly.
-/// 
-/// This results in some symbols having longer codes, but it makes decompression
-/// much faster, as it gives a definite upper bound on the size of paths.
-/// 
-/// I'm not sure what happens when the `max_code_length` is too small, so just
-/// in case it panics if the `max_code_length` isn't enough to store all the
-/// symbols in the `HuffmanTable`
-fn limit_huffman_table_code_sizes(huffman_table: &mut HuffmanTable, max_code_length:i32){
-
-    assert!((huffman_table.len() as f32).log2().ceil() as i32 <= max_code_length, "Maximum code length of [{}] not large enough to store all [{}] symbols, needs length of at least [{}]", max_code_length, huffman_table.len(), (huffman_table.len() as f32).log2().ceil() as i32);
-
-    let mut k = 0;
-    let k_max:usize = (1 << max_code_length) - 1;
-
-    for i in (0..huffman_table.len()).rev(){
-        huffman_table[i].level = min(huffman_table[i].level, max_code_length);
-        k += 1 << (max_code_length - huffman_table[i].level);
-    }
-
-    for i in (0..huffman_table.len()).rev(){
-        if k <= k_max {
-            break;
-        }
-        while huffman_table[i].level < max_code_length {
-            huffman_table[i].level += 1;
-            k -= 1 << (max_code_length - huffman_table[i].level);
-        }
-    }
-    for i in 0..huffman_table.len(){
-        while k + (1 << (max_code_length - huffman_table[i].level)) <= k_max {
-            k += 1 << (max_code_length - huffman_table[i].level);
-            huffman_table[i].level -= 1;
-        }
-    }
-}
-
-/// Writes a `HuffmanTable` to a given `BitWriter`.
-/// 
-/// First writes `MAX_SYMBOLS_SIZE` bits denoting the number of symbols in
-/// the `HuffmanTable` (`huffman_table.len()`) and `MAX_SYMBOLS_SIZE` bits
-/// denoting the number of bits used to encode a level 
-/// (`bits_per_level`). If there's only one symbol, write `1` instead.
-/// 
-/// For each symbol in the `HuffmanTable`, write `MAX_SYMBOLS_SIZE` bits
-/// denoting the symbol itself, and `bits_per_level` bits denoting the level
-/// of the symbol. This is better than writing the code itself, since the codes
-/// can get quite long.
-fn write_huffman_table(bitstream: &mut BitWriter, huffman_table: &HuffmanTable) {
-
-    assert!(huffman_table.len() <= MAX_SYMBOLS, "The given Huffman table has too many symbols");
-
-    bitstream.write_bits_u32(huffman_table.len() as u32, MAX_SYMBOLS_SIZE);
-
-    let max_level = huffman_table.iter().max().unwrap().level; //Is this really necessary? I guess every little bit helps...
-    bitstream.write_bits_u32(max_level as u32, MAX_SYMBOLS_SIZE);
-    let bits_per_level = max((max_level as f32).log2().ceil() as usize, 1);
-
-    for data in huffman_table{
-        let symbol = data.symbol;
-        let level = data.level;
-        bitstream.write_bits_u32(symbol as u32, MAX_SYMBOLS_SIZE);
-        bitstream.write_bits_u32(level as u32, bits_per_level);
-    }
-}
-
-/// Builds a `HuffmanCodeMap` from a given `HuffmanTable`
-/// 
-/// Relies on the fact that all the nodes on a specific level can have codes
-/// just by incrementing the code of the leaf next to it on the same level, if
-/// that makes any sense.
-fn build_huffman_code_map(huffman_table: &HuffmanTable) -> HuffmanCodeMap{
-    let mut map:HuffmanCodeMap = vec![None; MAX_SYMBOLS];
-
-    let mut code:HuffmanPath = 0;
-    let mut last_level = -1;
-
-    for data in huffman_table{
-        let symbol = data.symbol;
-        let level = data.level;
-
-        if last_level != level{
-            if last_level != -1 {
-                code += 1;
-                code <<= level - last_level;
-            }
-            last_level = level;
-        } else {
-            code += 1;
-        }
-
-        //let reversed_code = reverse_u32(code);
-        map[symbol as usize] = Some((code, level as usize));
-    }
-
-    map
-}
-
-/// Prints a given `HuffmanCodeMap`
-fn print_huffman_code_map(huffman_code_map: &HuffmanCodeMap) {
-    for symbol in 0..MAX_SYMBOLS{
-        if let Some((code, level)) = huffman_code_map[symbol]{
-            print!("Symbol: [{:x}] Code:[", symbol);
-            for i in (0..level).rev() {
-                print!("{}", if (code & (1 << i)) > 0 {1} else {0});
-            }
-            println!("]");
-        }
-    }
-}
-
-/// Fills a symbol table and level table.
-/// 
-/// It's basically the same as `build_huffman_code_map`, except instead
-/// of building a `HuffmanCodeMap` we're instead filling in two slices
-/// `symbol_table` and `level_table`. `symbol_table[i]` denotes the symbol 
-/// reached using code `i`, and `level_table[i]` denotes the actual length 
-/// of the code `i`. 
-/// 
-/// If, say, `000` is a path, if the maximum path length is `8`, we can be sure that
-/// the paths `0b00000000..0b00011111` all lead to the same symbol. Furthermore,
-/// this allows us to read the maximum path length of bis from the buffer, 
-/// making decompression much easier. This is why limiting the maximum path 
-/// length is so important.
-fn fill_huffman_symbol_maps(huffman_table: &HuffmanTable, symbol_table: &mut [HuffmanSymbol], level_table: &mut [i32], max_level: i32) {
-    //let mut map:HuffmanSymbolMap = vec![HuffmanTableData { symbol:0, level:0 }; 1 << max_level];
-
-    let mut code:HuffmanPath = 0;
-    let mut last_level = -1;
-
-    for data in huffman_table{
-        let symbol = data.symbol;
-        let level = data.level;
-
-        if last_level != level{
-            if last_level != -1 {
-                code += 1;
-                code <<= level - last_level;
-            }
-            last_level = level;
-        } else {
-            code += 1;
-        }
-
-        //let reversed_code = reverse_u32(code);
-        let start_code = (code << (max_level - level)) as usize;
-        let end_code = (start_code | ((1 << (max_level - level))-1)) as usize;
-        symbol_table[start_code..=end_code].fill(symbol);
-        level_table[start_code..=end_code].fill(level);
-        // for i in 0..(1 << (max_level - level)){
-        //     //println!("{:011b}",(code | (i << level)) as usize);
-        //     map[i | (code << (max_level - level)) as usize] = HuffmanTableData { symbol, level };
-        // }
-        //map[code as usize] = Some(HuffmanTableData { symbol, level });
-    }
-
-}
-*/
 
 impl HuffmanEncoder {
     pub fn new(bytes: &[u8], max_symbols: usize, max_code_length: usize) -> Self{
@@ -727,7 +520,23 @@ impl<'a> HuffmanDecoder<'a> {
             bytes_to_decode -= 1;
             bits_to_read = level;
         }
-        //println!("Chunk decoded");
+        // println!("Chunk decoded");
+
+        // while bytes_to_decode > 0{
+        //     //println!("{:011b} {}",path, bits_to_read);
+        //     //let bit = bitstream.read_bit().unwrap();
+        //     let path = self.reader.peek_bits_into_u32(self.max_code_length).unwrap();
+        //     //println!("{:011b}",path);
+        //     //let data = symbol_map[path as usize];
+        //     let symbol = self.symbol_map[path as usize];
+        //     let level = self.level_map[path as usize];
+
+        //     self.decoded.push(symbol);
+        //     self.reader.read_bits_into_u32(level as usize);
+        //     //path <<= level;
+        //     //path &= mask;
+        //     bytes_to_decode -= 1;
+        // }
     }
 
     pub fn decoded_bytes(&self) -> Vec<u8> {
@@ -764,17 +573,7 @@ pub fn compress_huffman(bytes: &[u8], chunk_size:usize, max_path_size:i32) -> Ve
     let chunk_size = min(chunk_size, (1 << 24) - 1);
     for i in (0..bytes.len()).step_by(chunk_size){
         let chunk = &bytes[i..min(bytes.len(),i+chunk_size)];
-        let curr_chunk_size = min(chunk_size, bytes.len() - i);
-
-        //println!("Frequency table generated");
-        //print_huffman_table(&huffman_table);
-        //println!("{:?}",huffman_table);
-        //println!("Max levels decreased");
-        //print_huffman_code_map(&map);
-        //println!("Huffman codes generated");
-        //println!("[{}]", curr_chunk_size);
-        //println!("[{}]",encoder.writer());
-        //println!("{} {}", curr_chunk_size, bitstream);
+        
         encoder.build_frequency_table(chunk);
         encoder.build_huffman_table();
 
@@ -803,7 +602,7 @@ pub fn decompress_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
     let mut decoder = HuffmanDecoder::new(encoded_bytes);
 
     while decoder.reader().remaining_bits() > CHUNK_SIZE_BITS {
-        //println!("{}",bitstream.remaining_bits());
+        //println!("{}",decoder.reader().remaining_bits());
         
         decoder.load_huffman_table();
         decoder.decode();
@@ -839,7 +638,7 @@ mod tests{
         
         assert!(contents.len() == decoded_bytes.len(), "Number of bytes different after encoding and decoding");
         for i in 0..contents.len(){
-            assert!(contents[i] == decoded_bytes[i], "Bytes different after encoding and decoding");
+            assert!(contents[i] == decoded_bytes[i], "Byte at position {i} different after encoding and decoding [{}] -> [{}]", contents[i], decoded_bytes[i]);
         }
     }
 

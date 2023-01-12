@@ -9,7 +9,7 @@ type MatchOffset = u32;
 
 const MIN_CODE_LEN:usize = 9;
 const MAX_CODE_LEN:usize = 12;
-const MAX_CODE:u32 = (1 << 12);
+const MAX_CODE:u32 = 1 << MAX_CODE_LEN;
 const CLEAR_CODE:u32 = 256;
 const EOD_CODE:u32 = 257;
 const START_CODE:u32 = 258;
@@ -72,7 +72,7 @@ pub fn compress_lzw_simple(bytes: &[u8]) -> Vec<u8> {
     let mut writer = BitWriter::new();
     let mut code_len:usize = MIN_CODE_LEN;
     let mut curr_max_code:u32 = 1 << MIN_CODE_LEN;
-    let mut map:HashMap<Vec<u8>,u32> = HashMap::with_capacity(1 << MAX_CODE_LEN);
+    let mut map:HashMap<Vec<u8>,u32> = HashMap::with_capacity(MAX_CODE as usize);
 
     init_lzw_compression_table(&mut map);
 
@@ -84,30 +84,30 @@ pub fn compress_lzw_simple(bytes: &[u8]) -> Vec<u8> {
         buffer_new.push(*byte);
 
         if map.contains_key(&buffer_new){
-
             buffer = buffer_new;
-
-        } else{
-
+        } else {
             writer.write_bits_u32(*map.get(&buffer).unwrap(),code_len);
             map.insert(buffer_new, code);
 
+            buffer.clear();
+            buffer.push(*byte);
+
             code += 1;
-            if code >= MAX_CODE{
-                //println!("Restarting table...");
-                writer.write_bits_u32(CLEAR_CODE, code_len);
 
-                code_len = MIN_CODE_LEN;
-                curr_max_code = 1 << MIN_CODE_LEN;
-                code = START_CODE;
-
-            } else if code >= curr_max_code {
+            if code > curr_max_code {
+                
                 code_len += 1;
                 curr_max_code <<= 1;
-                //println!("Increasing code length to {code_len}");
-            }
 
-            buffer = vec![*byte];
+                if code_len > MAX_CODE_LEN {
+                    writer.write_bits_u32(CLEAR_CODE, code_len);
+                
+                    code_len = MIN_CODE_LEN;
+                    curr_max_code = 1 << MIN_CODE_LEN;
+                    code = START_CODE;
+                    init_lzw_compression_table(&mut map);
+                }
+            }
         }
     }
     if !buffer.is_empty(){
@@ -127,8 +127,6 @@ pub fn compress_lzw_simple(bytes: &[u8]) -> Vec<u8> {
 /// used.
 pub fn compress_lzw_simple_as_bytes(bytes: &[u8]) -> Vec<u32> {
     let mut codes = Vec::new();
-    let mut code_len:usize = MIN_CODE_LEN;
-    let mut curr_max_code:u32 = 1 << MIN_CODE_LEN;
     let mut map:HashMap<Vec<u8>,u32> = HashMap::with_capacity(1 << MAX_CODE_LEN);
     init_lzw_compression_table(&mut map);
 
@@ -142,9 +140,11 @@ pub fn compress_lzw_simple_as_bytes(bytes: &[u8]) -> Vec<u32> {
         if map.contains_key(&buffer_new){
             buffer = buffer_new;
         } else{
-
             codes.push(*map.get(&buffer).unwrap());
             map.insert(buffer_new, code);
+
+            buffer.clear();
+            buffer.push(*byte);
 
             code += 1;
             if code >= MAX_CODE{
@@ -153,30 +153,37 @@ pub fn compress_lzw_simple_as_bytes(bytes: &[u8]) -> Vec<u32> {
 
                 init_lzw_compression_table(&mut map);
 
-                code_len = MIN_CODE_LEN;
-                curr_max_code = 1 << MIN_CODE_LEN;
                 code = START_CODE;
 
-            } else if code >= curr_max_code {
-                code_len += 1;
-                curr_max_code <<= 1;
             }
 
-            //buffer = vec![*byte];
-            buffer.clear();
-            buffer.push(*byte);
         }
     }
     if !buffer.is_empty(){
         codes.push(*map.get(&buffer).unwrap());
-        //writer.write_bits_u32(*map.get(&buffer).unwrap(),code_len);
     }
 
     codes.push(EOD_CODE);
 
     codes
 }
-
+/*
+482
+277
+279
+338
+446
+455
+502
+484
+276
+106
+106
+Increasing code length to 10
+314
+116
+436
+269 */
 /// Very stupid LZW decompression.
 /// 
 /// I only made this to get a better understanding of how LZW encoding works.
@@ -185,27 +192,30 @@ pub fn compress_lzw_simple_as_bytes(bytes: &[u8]) -> Vec<u32> {
 pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
     let mut reader = BitReader::new(encoded_bytes);
     let mut decoded_bytes = Vec::new();
+
     let mut code_len = MIN_CODE_LEN;
     let mut curr_max_code:u32 = 1 << MIN_CODE_LEN;
 
-    let mut table:HashMap<u32, Vec<u8>> = HashMap::with_capacity(1 << MAX_CODE_LEN);
+    let mut table:HashMap<u32, Vec<u8>> = HashMap::with_capacity(MAX_CODE as usize);
     init_lzw_decompression_table(&mut table);
 
     let mut prev = CLEAR_CODE;
     let mut code = START_CODE;
-    let mut entry = Vec::new();
+    let mut entry;
 
     loop {
 
+        let curr = reader.read_bits_into_u32(code_len).unwrap();
+
         if prev == CLEAR_CODE {
-            prev = reader.read_bits_into_u32(code_len).unwrap();
+            prev = curr;
             entry = table.get(&prev).unwrap().clone();
             decoded_bytes.extend(&entry);
             continue;
         }
 
         //println!("Old entry: {entry:?}");
-        match reader.read_bits_into_u32(code_len).unwrap() {
+        match curr {
             CLEAR_CODE => {
                 //println!("Clear code found, resetting table...");
                 init_lzw_decompression_table(&mut table);
@@ -219,10 +229,9 @@ pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
                 //println!("EOD code found");
                 break;
             },
-            curr => {
-                //println!("Code: {curr}");
-                if table.contains_key(&curr){ //curr < code
-                    //println!("In table");
+            _ => {
+
+                if table.contains_key(&curr){
                     entry = table.get(&curr).unwrap().clone();
                 } else if curr == code {
                     //println!("Not in table");
@@ -232,21 +241,18 @@ pub fn decompress_lzw_simple(encoded_bytes: &[u8]) -> Vec<u8> {
                     panic!("Bad compression with symbol {curr}, current code is {code}");
                 }
 
-                //println!("New entry: {entry:?}\n");
                 decoded_bytes.extend(&entry);
-
                 table.insert(code, [table.get(&prev).unwrap().clone(),vec![entry[0]]].concat());
-
                 code += 1;
-                if code >= curr_max_code {
+
+                if code == curr_max_code{ 
                     curr_max_code <<= 1;
                     code_len += 1;
-                    //println!("Increasing code length to {code_len}");
                 }
-                
-                prev = curr;
             }
         }
+
+        prev = curr;
         
     }
 
@@ -363,8 +369,15 @@ mod tests{
     pub fn lzw_simple_test() {
         use crate::lzw::{compress_lzw_simple, decompress_lzw_simple};
         use std::{fs, time};
+        use rand::prelude::*;
+        
         let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         //let bytes = "TOBEORNOTTOBEORTOBEORNOT".as_bytes();
+        // let byte_num = 8192;
+        // let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(2123);
+        // let mut bytes = Vec::with_capacity(byte_num);
+        // for _ in 0..byte_num {bytes.push(rng.gen::<u8>());}
+
         let start_time = time::Instant::now();
         let encoded_bytes = compress_lzw_simple(&bytes);
         let elapsed_time = start_time.elapsed().as_millis();
@@ -379,6 +392,5 @@ mod tests{
         
         assert!(decoded_bytes.len() == bytes.len(), "Number of bytes changed during compression and decompression.");
         assert!(bytes.iter().zip(&decoded_bytes).all(|(a,b)| *a == *b), "Bytes compressed and decompressed incorrectly");
-        
     }
 }

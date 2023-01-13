@@ -322,7 +322,7 @@ mod tests{
         use std::{fs, time};
         use rand::prelude::*;
         
-        let bytes = fs::read("enwik8").expect("File could not be opened and/or read");
+        let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         //let bytes = "TOBEORNOTTOBEORTOBEORNOT".as_bytes();
         // let byte_num = 4096;
         // let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(2123);

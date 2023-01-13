@@ -623,7 +623,7 @@ mod tests{
     fn huffman_test(chunk_size: usize){
         use std::{fs, time};
         use crate::huffman::{compress_huffman, decompress_huffman};
-        let contents = fs::read("enwik8").expect("File could not be opened and/or read");
+        let contents = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
 
         let start_time = time::Instant::now();
         let encoded_bytes = compress_huffman(&contents, chunk_size);

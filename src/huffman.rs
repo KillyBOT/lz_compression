@@ -181,7 +181,7 @@ impl HuffmanEncoder {
 
         let max_symbols =  min(max_symbols, MAX_SYMBOLS);
 
-        let mut encoder = HuffmanEncoder{
+        let mut encoder = HuffmanEncoder {
             writer:BitWriter::new(),
             freq_table:Vec::with_capacity(max_symbols),
             max_symbols:max_symbols,

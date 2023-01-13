@@ -1,6 +1,7 @@
 mod huffman;
 mod bitstream;
 mod lzw;
+mod lz;
 
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};

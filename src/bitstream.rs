@@ -95,9 +95,14 @@ impl<'a> BitReader<'a>{
     pub fn read_bits_into_u8(&mut self, bit_num:usize) -> Option<u8> {
 
         assert!(bit_num <= 8, "Can only read up to 8 bits, attempted to read [{}] bits", bit_num);
+        let remaining_bits = self.remaining_bits();
+        //print!("Before read: ");
+        //self.print_buffer();
 
-        if bit_num > self.remaining_bits() {
+        if remaining_bits == 0{
             return None;
+        } else if bit_num > remaining_bits{
+            return self.read_bits_into_u8(remaining_bits);
         } else if bit_num == 0 {
             return Some(0);
         }
@@ -106,6 +111,7 @@ impl<'a> BitReader<'a>{
         self.buffer <<= bit_num;
         self.bits_in_buffer -= bit_num;
         self.unused_bits_in_buffer += bit_num;
+
         self.refill();
 
         Some(bits)

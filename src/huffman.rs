@@ -1,4 +1,3 @@
-use std::char::MAX;
 use std::collections::{BinaryHeap};
 use std::cmp::{Ordering, min, max};
 use std::fmt::{self};
@@ -9,7 +8,9 @@ use crate::bitstream::{BitWriter, BitReader};
 const MAX_SYMBOLS:usize = 256;
 /// The number of bits needed to write the number of symbols.
 const MAX_SYMBOLS_SIZE:usize = 8;
-const CHUNK_SIZE_BITS:usize = 24;
+const CHUNK_SIZE_BITS:usize = 32;
+const MAX_CODE_LEN:usize = 11;
+const CODE_MASK:u32 = (1 << MAX_CODE_LEN) - 1;
 
 pub type HuffmanSymbol = u8;
 pub type HuffmanPath = u32;
@@ -53,7 +54,6 @@ pub struct HuffmanEncoder {
     freq_table: Vec<u64>,
     max_symbols: usize,
     max_symbols_size: usize,
-    max_code_length: usize,
     table: HuffmanTable,
     code_map: HuffmanCodeMap,
     last_length: usize
@@ -64,8 +64,7 @@ pub struct HuffmanDecoder<'a>{
     decoded: Vec<u8>,
     table: HuffmanTable,
     symbol_map: Vec<HuffmanSymbol>,
-    level_map: Vec<i32>,
-    max_code_length: usize,
+    level_map: Vec<i32>
 }
 
 /// A `Vec` of `HuffmanTableData`. Its `len()` equals the number of symbols 
@@ -178,7 +177,7 @@ impl HuffmanNode {
 }
 
 impl HuffmanEncoder {
-    pub fn new(bytes: &[u8], max_symbols: usize, max_code_length: usize) -> Self{
+    pub fn new(bytes: &[u8], max_symbols: usize) -> Self{
 
         let max_symbols =  min(max_symbols, MAX_SYMBOLS);
 
@@ -187,7 +186,6 @@ impl HuffmanEncoder {
             freq_table:Vec::with_capacity(max_symbols),
             max_symbols:max_symbols,
             max_symbols_size:((max_symbols as f32).log2().ceil() as usize),
-            max_code_length,
             table:Vec::with_capacity(max_symbols),
             code_map:vec![None; max_symbols],
             last_length:0
@@ -254,28 +252,28 @@ impl HuffmanEncoder {
     /// symbols in the `HuffmanTable`
     fn limit_huffman_table_code_sizes(&mut self){
 
-        assert!((self.table.len() as f32).log2().ceil() as usize <= self.max_code_length, "Maximum code length of [{}] not large enough to store all [{}] symbols, needs length of at least [{}]", self.max_code_length, self.table.len(), (self.table.len() as f32).log2().ceil() as i32);
+        assert!((self.table.len() as f32).log2().ceil() as usize <= MAX_CODE_LEN, "Maximum code length of [{}] not large enough to store all [{}] symbols, needs length of at least [{}]", MAX_CODE_LEN, self.table.len(), (self.table.len() as f32).log2().ceil() as i32);
 
         let mut k = 0;
-        let k_max:usize = (1 << self.max_code_length) - 1;
+        let k_max:usize = (1 << MAX_CODE_LEN) - 1;
 
         for i in (0..self.table.len()).rev(){
-            self.table[i].level = min(self.table[i].level, (self.max_code_length as i32));
-            k += 1 << ((self.max_code_length as i32) - self.table[i].level);
+            self.table[i].level = min(self.table[i].level, MAX_CODE_LEN as i32);
+            k += 1 << ((MAX_CODE_LEN as i32) - self.table[i].level);
         }
 
         for i in (0..self.table.len()).rev(){
             if k <= k_max {
                 break;
             }
-            while self.table[i].level < (self.max_code_length as i32) {
+            while self.table[i].level < (MAX_CODE_LEN as i32) {
                 self.table[i].level += 1;
-                k -= 1 << ((self.max_code_length as i32) - self.table[i].level);
+                k -= 1 << ((MAX_CODE_LEN as i32) - self.table[i].level);
             }
         }
         for i in 0..self.table.len(){
-            while k + (1 << ((self.max_code_length as i32) - self.table[i].level)) <= k_max {
-                k += 1 << ((self.max_code_length as i32) - self.table[i].level);
+            while k + (1 << ((MAX_CODE_LEN as i32) - self.table[i].level)) <= k_max {
+                k += 1 << ((MAX_CODE_LEN as i32) - self.table[i].level);
                 self.table[i].level -= 1;
             }
         }
@@ -301,6 +299,7 @@ impl HuffmanEncoder {
         let max_level = self.table.iter().max().unwrap().level; //Is this really necessary? I guess every little bit helps...
         self.writer.write_bits_u32(max_level as u32, MAX_SYMBOLS_SIZE);
         let bits_per_level = max((max_level as f32).log2().ceil() as usize, 1);
+        //println!("{max_level} {bits_per_level}");
 
         for data in &self.table{
             let symbol = data.symbol;
@@ -384,15 +383,17 @@ impl HuffmanEncoder {
         for symbol in symbols {
             if let Some((code, length)) = self.code_map[*symbol as usize]{
                 self.writer.write_bits_u32(code, length);
+                //self.last_length = length;
             }
         }
-        self.last_length = self.code_map[symbols[symbols.len() - 1] as usize].unwrap().1;
+       self.last_length = self.code_map[symbols[symbols.len() - 1] as usize].unwrap().1;
     }
 
     /// Finish the encoder, adding padding to the end to make sure that the
     /// decoder works.
     pub fn finish(&mut self) {
-        self.writer.write_bits_u32(0, self.max_code_length - self.last_length);
+        //println!("{} {}", self.last_length, self.max_code_length - self.la);
+        self.writer.write_bits_u32(0, MAX_CODE_LEN - self.last_length);
     }
 
     /// Returns a reference to the encoder's `BitWriter`
@@ -417,27 +418,25 @@ impl HuffmanEncoder {
 impl<'a> HuffmanDecoder<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
         let mut reader = BitReader::new(bytes);
-        let max_code_length = reader.read_bits_into_u8(8).unwrap() as usize;
         HuffmanDecoder { 
             reader, 
             decoded: Vec::new(),
             table: HuffmanTable::with_capacity(MAX_SYMBOLS), 
-            symbol_map: vec![0; 1 << max_code_length], 
-            level_map: vec![0; 1 << max_code_length], 
-            max_code_length
+            symbol_map: vec![0; 1 << MAX_CODE_LEN], 
+            level_map: vec![0; 1 << MAX_CODE_LEN], 
         }
     }
 
-    pub fn load_huffman_table(&mut self) {
-        let symbol_num = self.reader.read_bits_into_u32(8).unwrap();
+    pub fn read_huffman_table(&mut self) {
+        let symbol_num = self.reader.read_bits_into_u32(MAX_SYMBOLS_SIZE).unwrap() as usize;
         let max_level = self.reader.read_bits_into_u32(8).unwrap() as i32;
         let bits_per_level = max((max_level as f32).log2().ceil() as usize,1);
         //println!("Preliminary data read");
-        //println!("Chunk size: [{}] Symbol num: [{}] Max level: [{}]", chunk_size, symbol_num, max_level);
+        //println!("Chunk size: [{chunk_size}] Symbol num: [{symbol_num}] Max level: [{max_level}] Bits per level: [{bits_per_level}]");
 
         self.table.clear();
         for _ in 0..symbol_num{
-            let symbol = self.reader.read_bits_into_u8(8).unwrap();
+            let symbol = self.reader.read_bits_into_u8(MAX_SYMBOLS_SIZE).unwrap() as u8;
             let level = self.reader.read_bits_into_u32(bits_per_level).unwrap() as i32;
             self.table.push(HuffmanTableData{ symbol, level });
         }
@@ -482,8 +481,9 @@ impl<'a> HuffmanDecoder<'a> {
             }
 
             //let reversed_code = reverse_u32(code);
-            let start_code = (code << (self.max_code_length as i32 - level)) as usize;
-            let end_code = (start_code | ((1 << (self.max_code_length as i32 - level))-1)) as usize;
+            let start_code = (code << (MAX_CODE_LEN as i32 - level)) as usize;
+            let end_code = (start_code | ((1 << (MAX_CODE_LEN as i32 - level))-1)) as usize;
+            //println!("{} {level} {code:b} {start_code:064b} {end_code:064b}", self.max_code_length);
             self.symbol_map[start_code..=end_code].fill(symbol);
             self.level_map[start_code..=end_code].fill(level);
             // for i in 0..(1 << (max_level - level)){
@@ -502,8 +502,7 @@ impl<'a> HuffmanDecoder<'a> {
 
         let mut bytes_to_decode:usize = chunk_size;
         let mut path:u32 = 0;
-        let mut bits_to_read = self.max_code_length as i32;
-        let mask:u32 = (1 << self.max_code_length) - 1;
+        let mut bits_to_read = MAX_CODE_LEN as i32;
 
         while bytes_to_decode > 0{
             //println!("{:011b} {}",path, bits_to_read);
@@ -516,10 +515,12 @@ impl<'a> HuffmanDecoder<'a> {
 
             self.decoded.push(symbol);
             path <<= level;
-            path &= mask;
+            path &= CODE_MASK;
             bytes_to_decode -= 1;
             bits_to_read = level;
         }
+
+
         // println!("Chunk decoded");
 
         // while bytes_to_decode > 0{
@@ -565,11 +566,11 @@ impl<'a> HuffmanDecoder<'a> {
 /// larger `max_path_size`s results in decompression taking up much more space.
 /// Therefore, it's advised to make `max_path_size` as small as possible.
 /// If you're unsure what to set this to, I've found that `11` is a good length.
-pub fn compress_huffman(bytes: &[u8], chunk_size:usize, max_path_size:i32) -> Vec<u8> {
+pub fn compress_huffman(bytes: &[u8], chunk_size:usize) -> Vec<u8> {
 
-    let mut encoder = HuffmanEncoder::new(bytes, MAX_SYMBOLS, max_path_size as usize);
+    let mut encoder = HuffmanEncoder::new(bytes, MAX_SYMBOLS);
 
-    encoder.writer_mut().write_bits_u32(max_path_size as u32, 8);
+    //encoder.writer_mut().write_bits_u32(max_path_size as u32, 8);
     let chunk_size = min(chunk_size, (1 << 24) - 1);
     for i in (0..bytes.len()).step_by(chunk_size){
         let chunk = &bytes[i..min(bytes.len(),i+chunk_size)];
@@ -604,7 +605,7 @@ pub fn decompress_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
     while decoder.reader().remaining_bits() > CHUNK_SIZE_BITS {
         //println!("{}",decoder.reader().remaining_bits());
         
-        decoder.load_huffman_table();
+        decoder.read_huffman_table();
         decoder.decode();
         //println!("Huffman table read");
         //print_huffman_table(&huffman_table);
@@ -619,13 +620,13 @@ pub fn decompress_huffman(encoded_bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests{
 
-    fn huffman_test(chunk_size: usize, max_path_size:i32){
+    fn huffman_test(chunk_size: usize){
         use std::{fs, time};
         use crate::huffman::{compress_huffman, decompress_huffman};
-        let contents = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        let contents = fs::read("enwik8").expect("File could not be opened and/or read");
 
         let start_time = time::Instant::now();
-        let encoded_bytes = compress_huffman(&contents, chunk_size, max_path_size);
+        let encoded_bytes = compress_huffman(&contents, chunk_size);
         let elapsed_time = start_time.elapsed().as_millis();
 
         println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
@@ -644,21 +645,12 @@ mod tests{
 
     #[test]
     pub fn huffman_test_basic(){
-        huffman_test(usize::MAX, 20);
-    }
-    #[test]
-    pub fn huffman_test_limited_path_size(){
-        huffman_test(usize::MAX, 11);
+        huffman_test(usize::MAX);
     }
 
     #[test]
     pub fn huffman_test_chunking(){
-        huffman_test(1<<14, 20);
-    }
-
-    #[test]
-    pub fn huffman_test_chunking_limited_path_size(){
-        huffman_test(1<<14, 11);
+        huffman_test(1<<14);
     }
 
 }

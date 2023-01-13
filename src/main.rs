@@ -2,6 +2,28 @@ mod huffman;
 mod bitstream;
 mod lzw;
 
+use std::path::PathBuf;
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[arg(long)]
+    two: String,
+    #[arg(long)]
+    one: String,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// does testing things
+    Test {
+        /// lists test values
+        #[arg(short, long)]
+        list: bool,
+    },
+}
+
 fn main() {
 
     //use std::{env, fs, time};

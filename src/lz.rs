@@ -457,7 +457,7 @@ mod tests {
         use std::{fs, time};
         
         //let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
-        let bytes = "TOBEORNOTTOBE".as_bytes().to_vec();
+        let bytes = "ABCABCABCDEDEGGZ".as_bytes().to_vec();
         let mut encoder:LZEncoder = LZEncoder::new(64, false);
         encoder.parse(&bytes, 0, bytes.len());
         println!("{encoder}");
@@ -469,7 +469,7 @@ mod tests {
         use std::{fs, time};
         
         //let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
-        let bytes = "TOBEORNOTOBE".as_bytes().to_vec();
+        let bytes = "ABCABCABCDEDEGGZ".as_bytes().to_vec();
         let mut encoder:LZEncoder = LZEncoder::new(64, true);
         encoder.parse(&bytes, 0, bytes.len());
         println!("{encoder}");

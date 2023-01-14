@@ -414,26 +414,26 @@ impl LZEncoder {
 
     pub fn compress_huffman(&mut self, buffer: &[u8]) {
         let mut encoded:Vec<u8> = Vec::new();
-        
+
     }
 
 
 }
 
-pub fn decompress_lz(encoded_bytes: &[u8]) -> Vec<u8>{
-    let mut decoded_bytes = Vec::new();
-    let mut reader = HuffmanDecoder::new(encoded_bytes);
+// pub fn decompress_lz(encoded_bytes: &[u8]) -> Vec<u8>{
+//     let mut decoded_bytes = Vec::new();
+//     let mut reader = HuffmanDecoder::new(encoded_bytes);
 
-    let mut literals = Vec::with_capacity(CHUNK_SIZE);
-    let mut lengths = Vec::with_capacity(CHUNK_SIZE >> 2);
-    let mut offsets = Vec::with_capacity(CHUNK_SIZE >> 2);
-    let mut literal_offsets = Vec::with_capacity(CHUNK_SIZE >> 2);
-
-
+//     let mut literals = Vec::with_capacity(CHUNK_SIZE);
+//     let mut lengths = Vec::with_capacity(CHUNK_SIZE >> 2);
+//     let mut offsets = Vec::with_capacity(CHUNK_SIZE >> 2);
+//     let mut literal_offsets = Vec::with_capacity(CHUNK_SIZE >> 2);
 
 
-    decoded_bytes
-}
+
+
+//     decoded_bytes
+// }
 #[cfg(test)]
 mod tests {
     #[test]

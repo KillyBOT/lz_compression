@@ -69,7 +69,7 @@ pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
                 code_len += 1;
                 curr_max_code <<= 1;
                 //println!("Increasing code length to {code_len}");
-                if code_len == MAX_CODE_LEN {
+                if code_len > MAX_CODE_LEN {
                     writer.write_bits_u16(CLEAR_CODE, code_len);
                     
                     code_len = MIN_CODE_LEN;
@@ -320,7 +320,6 @@ mod tests{
     pub fn lzw_test() {
         use crate::lzw::{compress_lzw, decompress_lzw};
         use std::{fs, time};
-        use rand::prelude::*;
         
         let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         //let bytes = "TOBEORNOTTOBEORTOBEORNOT".as_bytes();

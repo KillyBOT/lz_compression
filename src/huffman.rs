@@ -177,7 +177,7 @@ impl HuffmanNode {
 }
 
 impl HuffmanEncoder {
-    pub fn new(bytes: &[u8], max_symbols: usize) -> Self{
+    pub fn new(max_symbols: usize) -> Self{
 
         let max_symbols =  min(max_symbols, MAX_SYMBOLS);
 
@@ -504,7 +504,7 @@ impl<'a> HuffmanDecoder<'a> {
         let mut path:u32 = 0;
         let mut bits_to_read = MAX_CODE_LEN as i32;
 
-        while bytes_to_decode > 0{
+        while bytes_to_decode > 0 {
             //println!("{:011b} {}",path, bits_to_read);
             //let bit = bitstream.read_bit().unwrap();
             path |= self.reader.read_bits_into_u32(bits_to_read as usize).unwrap();
@@ -568,7 +568,7 @@ impl<'a> HuffmanDecoder<'a> {
 /// If you're unsure what to set this to, I've found that `11` is a good length.
 pub fn compress_huffman(bytes: &[u8], chunk_size:usize) -> Vec<u8> {
 
-    let mut encoder = HuffmanEncoder::new(bytes, MAX_SYMBOLS);
+    let mut encoder = HuffmanEncoder::new(MAX_SYMBOLS);
 
     //encoder.writer_mut().write_bits_u32(max_path_size as u32, 8);
     let chunk_size = min(chunk_size, (1 << 24) - 1);

@@ -10,6 +10,7 @@ pub struct BitWriter {
 
 pub struct BitReader<'a> {
     buffer:u64,
+    remaining_bits: usize,
     bits_in_buffer:usize,
     unused_bits_in_buffer:usize,
     bytes:&'a [u8]
@@ -47,14 +48,14 @@ impl<'a> Iterator for BitReader<'a>{
 
 impl<'a> BitReader<'a>{
     pub fn new(bytes: &'a [u8]) -> Self {
-        let mut br = BitReader { buffer: 0, bits_in_buffer:0, unused_bits_in_buffer:64, bytes: bytes };
+        let mut br = BitReader { buffer: 0, remaining_bits: bytes.len() << 3, bits_in_buffer:0, unused_bits_in_buffer:64, bytes: bytes };
         br.refill();
 
         br
     }
 
     pub fn remaining_bits(&self) -> usize {
-        (self.bytes.len() << 3) + self.bits_in_buffer
+        self.remaining_bits
     }
     fn refill(&mut self) {
         while self.unused_bits_in_buffer >= 8 && self.bytes.len() > 0{
@@ -87,9 +88,35 @@ impl<'a> BitReader<'a>{
         self.buffer <<= 1;
         self.bits_in_buffer -= 1;
         self.unused_bits_in_buffer += 1;
+        self.remaining_bits -= 1;
         self.refill();
 
         Some(bit)
+    }
+
+    pub fn read_bits<T>(&mut self, bit_num:usize) -> Option<T> 
+    where
+    T: From<u64>{
+        let max_bits = std::mem::size_of::<T>() << 3;
+        assert!(bit_num <= max_bits, "Can only read up to [{max_bits}] bits, attempted to read [{bit_num}] bits");
+
+        if self.remaining_bits == 0 {
+            return None;
+        } else if bit_num > self.remaining_bits {
+            return self.read_bits::<T>(self.remaining_bits);
+        } else if bit_num == 0{
+            return Some(T::from(0));
+        }
+
+        let bits:T = T::from(self.buffer >> (64 - bit_num));
+        self.buffer <<= bit_num;
+        self.bits_in_buffer -= bit_num;
+        self.unused_bits_in_buffer += bit_num;
+        self.remaining_bits -= bit_num;
+
+        self.refill();
+
+        Some(bits)
     }
 
     pub fn read_bits_into_u8(&mut self, bit_num:usize) -> Option<u8> {
@@ -111,6 +138,7 @@ impl<'a> BitReader<'a>{
         self.buffer <<= bit_num;
         self.bits_in_buffer -= bit_num;
         self.unused_bits_in_buffer += bit_num;
+        self.remaining_bits -= bit_num;
 
         self.refill();
 
@@ -120,14 +148,13 @@ impl<'a> BitReader<'a>{
     pub fn read_bits_into_u16(&mut self, bit_num:usize) -> Option<u16> {
 
         assert!(bit_num <= 16, "Can only read up to 16 bits, attempted to read [{}] bits", bit_num);
-        let remaining_bits = self.remaining_bits();
         //print!("Before read: ");
         //self.print_buffer();
 
-        if remaining_bits == 0{
+        if self.remaining_bits == 0{
             return None;
-        } else if bit_num > remaining_bits{
-            return self.read_bits_into_u16(remaining_bits);
+        } else if bit_num > self.remaining_bits{
+            return self.read_bits_into_u16(self.remaining_bits);
         } else if bit_num == 0 {
             return Some(0);
         }
@@ -136,6 +163,7 @@ impl<'a> BitReader<'a>{
         self.buffer <<= bit_num;
         self.bits_in_buffer -= bit_num;
         self.unused_bits_in_buffer += bit_num;
+        self.remaining_bits -= bit_num;
 
         //print!("Before refill: ");
         //self.print_buffer();
@@ -150,15 +178,60 @@ impl<'a> BitReader<'a>{
 
     pub fn read_bits_into_u32(&mut self, bit_num:usize) -> Option<u32> {
 
-        assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
-        let remaining_bits = self.remaining_bits();
-        //print!("Before read: ");
+        assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{bit_num}] bits");
+
+        if self.remaining_bits == 0{
+            return None;
+        } else if bit_num > self.remaining_bits{
+            return self.read_bits_into_u32(self.remaining_bits);
+        } else if bit_num == 0 {
+            return Some(0);
+        }
+
+        let bits = (self.buffer >> (64 - bit_num)) as u32;
+        self.buffer <<= bit_num;
+        self.bits_in_buffer -= bit_num;
+        self.unused_bits_in_buffer += bit_num;
+        self.remaining_bits -= bit_num;
+
+        //print!("Before refill: ");
         //self.print_buffer();
 
-        if remaining_bits == 0{
+        self.refill();
+
+        //print!("After refill: ");
+        //self.print_buffer();
+
+        Some(bits)
+    }
+
+    pub fn empty_bits(&mut self, bit_num:usize){
+        
+        if bit_num > self.remaining_bits {
+            self.empty_bits(self.remaining_bits);
+        }
+        if bit_num > self.bits_in_buffer{
+            self.empty_bits(self.bits_in_buffer);
+            self.empty_bits(bit_num - self.bits_in_buffer);
+        }
+
+        self.buffer <<= bit_num;
+        self.bits_in_buffer -= bit_num;
+        self.unused_bits_in_buffer += bit_num;
+        self.remaining_bits -= bit_num;
+
+        self.refill();
+    }
+
+    pub fn read_bits_into_u32_with_shift(&mut self, bit_num:usize) -> Option<u32> {
+        assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{bit_num}] bits");
+
+        if self.remaining_bits == 0{
             return None;
-        } else if bit_num > remaining_bits{
-            return self.read_bits_into_u32(remaining_bits);
+        } else if bit_num > self.remaining_bits{
+            let shift_amount = bit_num - self.remaining_bits;
+            let val = self.read_bits_into_u32(self.remaining_bits).unwrap();
+            return Some(val << shift_amount);
         } else if bit_num == 0 {
             return Some(0);
         }
@@ -179,15 +252,30 @@ impl<'a> BitReader<'a>{
         Some(bits)
     }
 
-    pub fn peek_bits_into_u32(&mut self, bit_num:usize) -> Option<u32> {
+    pub fn peek_bits_into_u32(&self, bit_num:usize) -> Option<u32> {
 
         assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
-        let remaining_bits = self.remaining_bits();
 
-        if remaining_bits == 0 {
+        if self.remaining_bits == 0 {
             return None;
-        } else if bit_num > remaining_bits{
-            return self.peek_bits_into_u32(remaining_bits);
+        } else if bit_num > self.remaining_bits{
+            return self.peek_bits_into_u32(self.remaining_bits);
+        } else if bit_num == 0 {
+            return Some(0);
+        }
+            
+        Some((self.buffer >> (64 - bit_num)) as u32)
+    }
+
+    pub fn peek_bits_into_u32_with_shift(&self, bit_num:usize) -> Option<u32> {
+        assert!(bit_num <= 32, "Can only read up to 32 bits, attempted to read [{}] bits", bit_num);
+
+        if self.remaining_bits == 0 {
+            return None;
+        } else if bit_num > self.remaining_bits{
+            let shift_amount = bit_num - self.remaining_bits;
+            let val = self.peek_bits_into_u32(self.remaining_bits).unwrap();
+            return Some(val << shift_amount)
         } else if bit_num == 0 {
             return Some(0);
         }

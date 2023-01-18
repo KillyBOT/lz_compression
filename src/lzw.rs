@@ -1,5 +1,4 @@
 use crate::bitstream::{BitReader, BitWriter};
-use crate::huffman::{HuffmanSymbol, HuffmanPath, compress_huffman, decompress_huffman};
 use std::char::MAX;
 use std::collections::HashMap;
 

@@ -1,10 +1,10 @@
 use crate::bitstream::{BitReader, BitWriter};
-use crate::huffman::{HuffmanSymbol, HuffmanPath, compress_huffman, decompress_huffman, HuffmanEncoder, HuffmanDecoder};
+use crate::huffman::{HuffmanSymbol, HuffmanPath, HuffmanEncoder, HuffmanDecoder, HUFFMAN_CHUNK_SIZE_BITS, HUFFMAN_MAX_SYMBOLS};
 use std::collections::HashMap;
 use std::fmt::{self};
 use std::cmp::{min, max};
 
-const CHUNK_SIZE:usize = 1 << 18;
+const LZ_CHUNK_SIZE:usize = 1 << 18;
 const MAX_MATCH_NUM:usize = 16;
 
 type LZLength = u32;
@@ -15,7 +15,7 @@ fn fast_log2_floor_u32(n: u32) -> u32 {
 }
 
 fn huffman_symbol_from_length(length: usize) -> HuffmanSymbol {
-    if length <= 15{
+    if length < 16{
         return length as HuffmanSymbol;
     }
 
@@ -23,7 +23,7 @@ fn huffman_symbol_from_length(length: usize) -> HuffmanSymbol {
 }
 
 fn huffman_symbol_from_offset(offset: usize) -> HuffmanSymbol {
-    if offset <= 2{
+    if offset < 2{
         return offset as HuffmanSymbol;
     }
 
@@ -51,13 +51,23 @@ struct MatchFinder {
     next_map:HashMap<usize, usize>
 }
 
-pub struct LZEncoder {
+pub struct LZEncoder<'a>{
+    writer: &'a mut BitWriter,
     matcher: MatchFinder,
     do_optimal_parsing: bool,
     literals: Vec<u8>,
     match_lengths: Vec<usize>,
     match_offsets: Vec<usize>,
-    literal_lengths: Vec<usize>
+    match_literal_lengths: Vec<usize>
+}
+
+pub struct LZDecoder<'a, 'b: 'a> {
+    decoder: HuffmanDecoder<'a, 'b>,
+    literals: Vec<u8>,
+    match_lengths:Vec<usize>,
+    match_offsets: Vec<usize>,
+    match_literal_lengths: Vec<usize>,
+    decoded: Vec<u8>
 }
 
 impl MatchFinder {
@@ -169,7 +179,7 @@ impl MatchFinder {
     }
 }
 
-impl fmt::Display for LZEncoder {
+impl<'a> fmt::Display for LZEncoder<'a>{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 
         let mut repr:String = String::new();
@@ -179,7 +189,7 @@ impl fmt::Display for LZEncoder {
         }
         repr.push_str("\nMatches:\n");
         for i in 0..self.match_lengths.len(){
-            repr.push_str(format!("Match: [length: {} offset: {} literal_length: {}]\n", self.match_lengths[i], self.match_offsets[i], self.literal_lengths[i]).as_str());
+            repr.push_str(format!("Match: [length: {} offset: {} literal_length: {}]\n", self.match_lengths[i], self.match_offsets[i], self.match_literal_lengths[i]).as_str());
         }
 
         write!(f,"{}",repr)
@@ -188,15 +198,16 @@ impl fmt::Display for LZEncoder {
 }
 
 
-impl LZEncoder {
-    pub fn new(window_size: usize, do_optimal_parsing: bool) -> Self {
+impl<'a> LZEncoder<'a>{
+    pub fn new(writer: &'a mut BitWriter, window_size: usize, do_optimal_parsing: bool) -> Self {
         LZEncoder { 
+            writer,
             matcher: MatchFinder::new(window_size), 
             do_optimal_parsing, 
-            literals: Vec::with_capacity(CHUNK_SIZE), 
-            match_lengths: Vec::with_capacity(CHUNK_SIZE >> 2), 
-            match_offsets: Vec::with_capacity(CHUNK_SIZE >> 2), 
-            literal_lengths: Vec::with_capacity(CHUNK_SIZE >> 2)
+            literals: Vec::with_capacity(LZ_CHUNK_SIZE), 
+            match_lengths: Vec::with_capacity(LZ_CHUNK_SIZE >> 2), 
+            match_offsets: Vec::with_capacity(LZ_CHUNK_SIZE >> 2), 
+            match_literal_lengths: Vec::with_capacity(LZ_CHUNK_SIZE >> 2)
         }
     }
 
@@ -213,7 +224,7 @@ impl LZEncoder {
                 
                 self.match_lengths.push(match_len);
                 self.match_offsets.push(pos - match_pos);
-                self.literal_lengths.push(literal_num);
+                self.match_literal_lengths.push(literal_num);
     
                 literal_num = 0;
     
@@ -236,7 +247,7 @@ impl LZEncoder {
             //println!("Match: [length: 0 offset: 0 literal_count: {literal_num}]");
             self.match_lengths.push(0);
             self.match_offsets.push(0);
-            self.literal_lengths.push(literal_num);
+            self.match_literal_lengths.push(literal_num);
         }
     
         //println!("Match lengths: {match_lengths:?}\nMatch offsets: {match_offsets:?}\nLiteral lengths: {literal_lengths:?}\nLiterals: {literals:?}");
@@ -291,7 +302,7 @@ impl LZEncoder {
             let match_num = self.match_lengths.len();
             self.match_offsets.push(0);
             self.match_lengths.push(0);
-            self.literal_lengths.push(0);
+            self.match_literal_lengths.push(0);
         }
 
         let mut i = range;
@@ -299,18 +310,18 @@ impl LZEncoder {
             if lengths[i] > 1 {
                 self.match_lengths.push(lengths[i]);
                 self.match_offsets.push(offsets[i]);
-                self.literal_lengths.push(0);
+                self.match_literal_lengths.push(0);
                 i -= lengths[i];
             } else {
                 self.literals.push(buffer[start_pos + i - 1]);
-                self.literal_lengths[self.match_lengths.len() - 1] += 1;
+                self.match_literal_lengths[self.match_lengths.len() - 1] += 1;
                 i -= 1;
             }
         }
 
         self.match_lengths = self.match_lengths.iter().copied().rev().collect();
         self.match_offsets = self.match_offsets.iter().copied().rev().collect();
-        self.literal_lengths = self.literal_lengths.iter().copied().rev().collect();
+        self.match_literal_lengths = self.match_literal_lengths.iter().copied().rev().collect();
         self.literals = self.literals.iter().copied().rev().collect();
     }
 
@@ -318,124 +329,217 @@ impl LZEncoder {
         self.literals.clear();
         self.match_lengths.clear();
         self.match_offsets.clear();
-        self.literal_lengths.clear();
+        self.match_literal_lengths.clear();
         match self.do_optimal_parsing{
             true => self.optimal_parse(buffer, start_pos, end_pos),
             false => self.simple_parse(buffer, start_pos, end_pos)
         }
     }
 
-    fn huffman_encode_lengths(&self) -> Vec<u8> {
-        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(32);
+    fn huffman_encode_lengths(&mut self) {
+        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, 32);
 
         for i in 0..self.match_lengths.len() {
             encoder.scan_byte(huffman_symbol_from_length(self.match_lengths[i]));
         }
 
         encoder.build_huffman_table();
+        encoder.writer.write_bits_u32(self.match_lengths.len() as u32, HUFFMAN_CHUNK_SIZE_BITS);
         
         for i in 0..self.match_lengths.len(){
             let length = self.match_lengths[i];
             encoder.encode_symbol(huffman_symbol_from_length(length));
             if length >= 16 {
-                encoder.writer_mut().write_bits_u32(extra_huffman_symbol(length) as u32, fast_log2_floor_u32(length as u32) as usize);
+                encoder.writer.write_bits_u32(extra_huffman_symbol(length) as u32, fast_log2_floor_u32(length as u32) as usize);
             }
         }
-        encoder.finish();
-
-        encoder.writer().get_bytes()
     }
 
-    fn huffman_encode_offsets(&self) -> Vec<u8> {
-        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(32);
+    fn huffman_encode_offsets(&mut self) {
+        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, 32);
 
         for i in 0..self.match_offsets.len() {
-            encoder.scan_byte(huffman_symbol_from_length(self.match_offsets[i]));
+            encoder.scan_byte(huffman_symbol_from_offset(self.match_offsets[i]));
         }
 
         encoder.build_huffman_table();
-        
+
+        encoder.writer.write_bits_u32(self.match_offsets.len() as u32, HUFFMAN_CHUNK_SIZE_BITS);
         for i in 0..self.match_offsets.len(){
             let offset = self.match_offsets[i];
             encoder.encode_symbol(huffman_symbol_from_offset(offset));
             if offset >= 2 {
-                encoder.writer_mut().write_bits_u32(extra_huffman_symbol(offset) as u32, fast_log2_floor_u32(offset as u32) as usize);
+                encoder.writer.write_bits_u32(extra_huffman_symbol(offset) as u32, fast_log2_floor_u32(offset as u32) as usize);
             }
         }
-        encoder.finish();
 
-        encoder.writer().get_bytes()
     }
 
-    fn huffman_encode_literal_lengths(&self) -> Vec<u8> {
-        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(32);
+    fn huffman_encode_literal_lengths(&mut self){
+        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, 32);
 
-        for i in 0..self.literal_lengths.len() {
-            encoder.scan_byte(huffman_symbol_from_length(self.literal_lengths[i]));
+        for i in 0..self.match_literal_lengths.len() {
+            encoder.scan_byte(huffman_symbol_from_length(self.match_literal_lengths[i]));
         }
 
         encoder.build_huffman_table();
-        
-        for i in 0..self.literal_lengths.len(){
-            let literal_length = self.literal_lengths[i];
+
+        encoder.writer.write_bits_u32(self.match_literal_lengths.len() as u32, HUFFMAN_CHUNK_SIZE_BITS);
+        for i in 0..self.match_literal_lengths.len(){
+            let literal_length = self.match_literal_lengths[i];
             encoder.encode_symbol(huffman_symbol_from_length(literal_length));
             if literal_length >= 16 {
-                encoder.writer_mut().write_bits_u32(extra_huffman_symbol(literal_length) as u32, fast_log2_floor_u32(literal_length as u32) as usize);
+                encoder.writer.write_bits_u32(extra_huffman_symbol(literal_length) as u32, fast_log2_floor_u32(literal_length as u32) as usize);
             }
         }
-        encoder.finish();
 
-        encoder.writer().get_bytes()
+
     }
 
-    fn huffman_encode_literals(&self) -> Vec<u8> {
-        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(256);
+    fn huffman_encode_literals(&mut self){
+        let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, HUFFMAN_MAX_SYMBOLS);
 
-        encoder.writer_mut().write_bits_u32(self.literals.len() as u32, 32);
-        encoder.build_frequency_table(&self.literals);
-        encoder.build_huffman_table();
-        encoder.encode_symbols(&self.literals);
-
-        encoder.finish();
-        encoder.writer().get_bytes()
+        encoder.encode_all(&self.literals, usize::MAX);
     }
 
-    pub fn huffman_encode_chunk(&mut self, buffer: &[u8], start_pos: usize, end_pos: usize) -> Vec<u8> {
-        let mut encoded:Vec<u8> = Vec::new();
+    pub fn huffman_encode_chunk(&mut self, buffer: &[u8], start_pos: usize, end_pos: usize){
         self.parse(buffer, start_pos, end_pos);
 
-        encoded.extend(self.huffman_encode_literals());
-        encoded.extend(self.huffman_encode_lengths());
-        encoded.extend(self.huffman_encode_offsets());
-        encoded.extend(self.huffman_encode_literal_lengths());
-
-        encoded
+        self.huffman_encode_literals();
+        self.huffman_encode_lengths();
+        self.huffman_encode_offsets();
+        self.huffman_encode_literal_lengths();
     }
 
-    pub fn compress_huffman(&mut self, buffer: &[u8]) {
-        let mut encoded:Vec<u8> = Vec::new();
+    pub fn huffman_encode_all(&mut self, buffer: &[u8], chunk_size: usize) {
+        let chunk_size = min(chunk_size, buffer.len());
 
+        for start_pos in (0..buffer.len()).step_by(chunk_size){
+            let end_pos = min(start_pos + chunk_size, buffer.len());
+            let chunk = &buffer[start_pos..end_pos];
+            self.huffman_encode_chunk(chunk, start_pos, end_pos)
+        }
     }
 
+    pub fn writer(&self) -> &BitWriter {
+        &self.writer
+    }
+
+    pub fn writer_mut(&mut self) -> &mut BitWriter {
+        &mut self.writer
+    }
 
 }
 
-// pub fn decompress_lz(encoded_bytes: &[u8]) -> Vec<u8>{
-//     let mut decoded_bytes = Vec::new();
-//     let mut reader = HuffmanDecoder::new(encoded_bytes);
+impl<'a, 'b:'a> LZDecoder<'a, 'b> {
+    pub fn new(reader: &'a mut BitReader<'b>) -> Self {
+        LZDecoder { 
+            decoder: HuffmanDecoder::new(reader), 
+            literals: Vec::with_capacity(LZ_CHUNK_SIZE), 
+            match_lengths: Vec::with_capacity(LZ_CHUNK_SIZE >> 2),
+            match_offsets: Vec::with_capacity(LZ_CHUNK_SIZE >> 2), 
+            match_literal_lengths: Vec::with_capacity(LZ_CHUNK_SIZE >> 2),
+            decoded: Vec::new()
+        }
+    }
 
-//     let mut literals = Vec::with_capacity(CHUNK_SIZE);
-//     let mut lengths = Vec::with_capacity(CHUNK_SIZE >> 2);
-//     let mut offsets = Vec::with_capacity(CHUNK_SIZE >> 2);
-//     let mut literal_offsets = Vec::with_capacity(CHUNK_SIZE >> 2);
+    fn huffman_decode_literals(&mut self) {
+        self.literals.clear();
 
+        self.decoder.read_huffman_table();
+        self.literals.append(&mut self.decoder.decode_chunk());
+        //println!("Literals: {:?}", self.literals);
+    }
 
+    fn huffman_decode_lengths(&mut self) {
+        self.match_lengths.clear();
 
+        self.decoder.read_huffman_table();
+        let match_num = self.decoder.reader.read_bits_into_u32(HUFFMAN_CHUNK_SIZE_BITS).unwrap();
+        for _ in 0..match_num{
+            let mut val = self.decoder.decode_one() as u32;
+            if val >= 16 {
+                let extra_bits = val - 12;
+                val = (1 << extra_bits) | self.decoder.reader.read_bits_into_u32(extra_bits as usize).unwrap();
+            }
+            self.match_lengths.push(val as usize);
+        }
 
-//     decoded_bytes
-// }
+        //println!("Match lengths: {:?}", self.match_lengths);
+    }
+
+    fn huffman_decode_offsets(&mut self) {
+        self.match_offsets.clear();
+
+        self.decoder.read_huffman_table();
+        let match_num = self.decoder.reader.read_bits_into_u32(HUFFMAN_CHUNK_SIZE_BITS).unwrap();
+        for _ in 0..match_num{
+            let mut val = self.decoder.decode_one() as u32;
+            if val >= 2 {
+                let extra_bits = val - 1;
+                val = (1 << extra_bits) | self.decoder.reader.read_bits_into_u32(extra_bits as usize).unwrap();
+            }
+            self.match_offsets.push(val as usize);
+        }
+
+        //println!("Match offsets: {:?}", self.match_offsets);
+    }
+
+    fn huffman_decode_literal_lengths(&mut self) {
+        self.match_literal_lengths.clear();
+
+        self.decoder.read_huffman_table();
+        let match_num = self.decoder.reader.read_bits_into_u32(HUFFMAN_CHUNK_SIZE_BITS).unwrap();
+        for _ in 0..match_num{
+            let mut val = self.decoder.decode_one() as u32;
+            if val >= 16 {
+                let extra_bits = val - 12;
+                val = (1 << extra_bits) | self.decoder.reader.read_bits_into_u32(extra_bits as usize).unwrap();
+            }
+            self.match_literal_lengths.push(val as usize);
+        }
+
+        //println!("Match literal lengths: {:?}", self.match_literal_lengths);
+    }
+
+    pub fn huffman_decode_chunk(&mut self) -> Vec<u8>{
+        let mut decoded = Vec::new();
+        self.huffman_decode_literals();
+        self.huffman_decode_lengths();
+        self.huffman_decode_offsets();
+        self.huffman_decode_literal_lengths();
+
+        let mut curr_literal:usize = 0;
+        for i in 0..self.match_lengths.len(){
+            for _ in 0..self.match_literal_lengths[i]{
+                decoded.push(self.literals[curr_literal]);
+                curr_literal += 1;
+            }
+            let match_start = decoded.len() - self.match_offsets[i];
+
+            for j in 0..self.match_lengths[i] {
+                decoded.push(decoded[match_start + j]);
+            }
+        }
+
+        decoded
+    }
+
+    pub fn huffman_decode_all(&mut self) -> Vec<u8> {
+        let mut decoded = Vec::new();
+        while self.decoder.reader.remaining_bits() > HUFFMAN_CHUNK_SIZE_BITS {
+            decoded.append(&mut self.huffman_decode_chunk());
+        }
+
+        decoded
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::{bitstream::{BitWriter, BitReader}, lz::{LZDecoder, LZ_CHUNK_SIZE}};
+
     #[test]
     fn fast_log2_floor_u32_test() {
         use rand::prelude::*;
@@ -456,11 +560,18 @@ mod tests {
         use crate::lz::LZEncoder;
         use std::{fs, time};
         
-        //let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
-        let bytes = "ABCABCABCDEDEGGZ".as_bytes().to_vec();
-        let mut encoder:LZEncoder = LZEncoder::new(64, false);
+        let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        let mut writer = BitWriter::new();
+        let mut encoder:LZEncoder = LZEncoder::new(&mut writer, 64, false);
+
+        let start_time = time::Instant::now();
+
         encoder.parse(&bytes, 0, bytes.len());
-        println!("{encoder}");
+
+        let elapsed_time = start_time.elapsed().as_millis();
+        println!("Simple parse took {elapsed_time}ms");
+
+        //println!("{encoder}");
     }
 
     #[test]
@@ -468,10 +579,46 @@ mod tests {
         use crate::lz::LZEncoder;
         use std::{fs, time};
         
-        //let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
-        let bytes = "ABCABCABCDEDEGGZ".as_bytes().to_vec();
-        let mut encoder:LZEncoder = LZEncoder::new(64, true);
+        let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        let mut writer = BitWriter::new();
+        let mut encoder:LZEncoder = LZEncoder::new(&mut writer, 64, true);
+        
+        let start_time = time::Instant::now();
+
         encoder.parse(&bytes, 0, bytes.len());
-        println!("{encoder}");
+
+        let elapsed_time = start_time.elapsed().as_millis();
+        println!("Optimal parse took {elapsed_time}ms");
+    }
+    #[test]
+    fn lz_compression_decompression_test() {
+        use crate::lz::{LZEncoder};
+        use std::{fs, time};
+
+        //let contents = "ABCABCABCDEDEGGZ".as_bytes().to_vec();
+        let contents = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        let mut writer = BitWriter::new();
+        let mut encoder:LZEncoder = LZEncoder::new(&mut writer, 64, true);
+        
+        let start_time = time::Instant::now();
+        encoder.huffman_encode_all(&contents, LZ_CHUNK_SIZE);
+        let encoded_bytes = encoder.writer().get_bytes();
+
+        let elapsed_time = start_time.elapsed().as_millis();
+        println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
+        
+        
+        let mut reader = BitReader::new(&encoded_bytes);
+        let mut decoder = LZDecoder::new(&mut reader);
+        let start_time = time::Instant::now();
+        let decoded_bytes = decoder.huffman_decode_all();
+        let elapsed_time = start_time.elapsed().as_millis();
+        println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));
+
+        assert!(contents.len() == decoded_bytes.len(), "Number of bytes different after encoding and decoding");
+        for i in 0..contents.len(){
+            assert!(contents[i] == decoded_bytes[i], "Byte at position {i} different after encoding and decoding [{}] -> [{}]", contents[i], decoded_bytes[i]);
+        }
+        
     }
 }

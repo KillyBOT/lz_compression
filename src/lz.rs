@@ -36,7 +36,7 @@ fn extra_huffman_symbol(v: usize) -> HuffmanSymbol {
 
 fn key_from_bytes(buffer: &[u8], pos: usize) -> u32{
     let mut hash:u32 = 0;
-    let byte_num = if pos + 4 >= buffer.len() {buffer.len() - pos} else {4};
+    let byte_num = if pos + 3 >= buffer.len() {buffer.len() - pos} else {3};
     for i in 0..byte_num{
         hash <<= 8;
         hash |= buffer[pos + i] as u32;
@@ -338,7 +338,7 @@ impl<'a> LZEncoder<'a>{
         let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, 32);
 
         for i in 0..self.match_lengths.len() {
-            encoder.scan_byte(huffman_symbol_from_length(self.match_lengths[i]));
+            encoder.scan_symbol(huffman_symbol_from_length(self.match_lengths[i]));
         }
 
         encoder.build_huffman_table();
@@ -357,7 +357,7 @@ impl<'a> LZEncoder<'a>{
         let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, 32);
 
         for i in 0..self.match_offsets.len() {
-            encoder.scan_byte(huffman_symbol_from_offset(self.match_offsets[i]));
+            encoder.scan_symbol(huffman_symbol_from_offset(self.match_offsets[i]));
         }
 
         encoder.build_huffman_table();
@@ -377,7 +377,7 @@ impl<'a> LZEncoder<'a>{
         let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, 32);
 
         for i in 0..self.match_literal_lengths.len() {
-            encoder.scan_byte(huffman_symbol_from_length(self.match_literal_lengths[i]));
+            encoder.scan_symbol(huffman_symbol_from_length(self.match_literal_lengths[i]));
         }
 
         encoder.build_huffman_table();
@@ -397,7 +397,7 @@ impl<'a> LZEncoder<'a>{
     fn huffman_encode_literals(&mut self){
         let mut encoder:HuffmanEncoder = HuffmanEncoder::new(self.writer, HUFFMAN_MAX_SYMBOLS);
 
-        encoder.encode_all(&self.literals, usize::MAX);
+        encoder.encode_all_bytes(&self.literals, usize::MAX);
     }
 
     pub fn huffman_encode_chunk(&mut self, buffer: &[u8]){
@@ -445,7 +445,7 @@ impl<'a, 'b:'a> LZDecoder<'a, 'b> {
         self.literals.clear();
 
         self.decoder.read_huffman_table();
-        self.literals.append(&mut self.decoder.decode_chunk());
+        self.literals.append(&mut HuffmanDecoder::symbols_to_bytes(&self.decoder.decode_chunk()));
         //println!("Literals: {:?}", self.literals);
     }
 

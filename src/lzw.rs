@@ -65,9 +65,10 @@ pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
             next_code += 1;
 
             if next_code == curr_max_code {
+                
                 code_len += 1;
                 curr_max_code <<= 1;
-                //println!("Increasing code length to {code_len}");
+
                 if code_len > MAX_CODE_LEN {
                     writer.write_bits_u16(CLEAR_CODE, code_len);
                     
@@ -87,64 +88,6 @@ pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
     writer.get_bytes()
 }
 
-
-/// LZW compression.
-/// 
-/// In the event of a table overflow, the GIF approach of remaking the table is
-/// used.
-/// 
-/// This implementation is based on the C implementation found at
-/// https://rosettacode.org/wiki/LZW_compression#C. I think this implementation
-/// is what GIF uses, but I'm not sure.
-/*pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
-    let mut writer = BitWriter::new();
-    let mut code_len:usize = MIN_CODE_LEN;
-    let mut curr_max_code:u16 = START_MAX_CODE;
-    let mut table:Vec<Option<u16>> = vec![None; (MAX_CODE as usize) * 256];
-
-    let mut code = bytes[0] as u16;
-    let mut next_code = START_CODE;
-    
-    for byte in &bytes[1..] {
-        let byte = *byte as u16;
-        
-        //let next_option = table[code as usize].next[byte as usize];
-
-        if let Some(next) = table[(code as usize) << 8 + (byte as usize)]{
-            code = next;
-        } else {
-            //println!("{code}");
-            writer.write_bits_u16(code, code_len);
-            table[(code as usize) << 8 + (byte as usize)] = Some(next_code);
-            //table.insert((code, byte), next_code);
-            code = byte;
-
-            next_code += 1;
-
-            if next_code == curr_max_code {
-                code_len += 1;
-                curr_max_code <<= 1;
-                //println!("Increasing code length to {code_len}");
-                if code_len > MAX_CODE_LEN {
-                    writer.write_bits_u16(CLEAR_CODE, code_len);
-                    
-                    code_len = MIN_CODE_LEN;
-                    curr_max_code = START_MAX_CODE;
-                    next_code = START_CODE;
-
-                    //table.clear();
-                    table.fill(None);
-                }
-            }
-        }
-    }
-
-    writer.write_bits_u16(code,code_len);
-    writer.write_bits_u16(EOD_CODE, code_len);
-
-    writer.get_bytes()
-}
-*/
 /// LZW decompression.
 /// 
 /// In the event of a table overflow, the GIF approach of remaking the table is

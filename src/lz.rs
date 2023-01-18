@@ -211,14 +211,14 @@ impl<'a> LZEncoder<'a>{
         }
     }
 
-    fn simple_parse(&mut self, buffer: &[u8], start_pos: usize, end_pos: usize){
+    fn simple_parse(&mut self, buffer: &[u8]){
         let min_match_len:usize = 5;
         let mut literal_num = 0;
-        let mut pos = start_pos;
+        let mut pos = 0;
     
-        while pos < end_pos {
+        while pos < buffer.len() {
             let (mut match_len, match_pos) = self.matcher.find_match(buffer, pos);
-            if match_len >= min_match_len && pos < end_pos - 4 {
+            if match_len >= min_match_len && pos < buffer.len() - 4 {
     
                 //println!("Pos: {pos} Match: [length: {match_len} offset: {} literal_count: {literal_num}]", pos - match_pos);
                 
@@ -266,18 +266,16 @@ impl<'a> LZEncoder<'a>{
         length_cost + offset_cost
     }
 
-    fn optimal_parse(&mut self, buffer: &[u8], start_pos: usize, end_pos: usize) {
-        let end_pos = min(buffer.len(), end_pos);
-        let range = end_pos - start_pos;
+    fn optimal_parse(&mut self, buffer: &[u8]) {
         let mut matcher = MatchFinder::new(64);
 
-        let mut prices:Vec<u32> = vec![u32::MAX; range + 1];
-        let mut lengths:Vec<usize> = vec![0; range + 1];
-        let mut offsets:Vec<usize> = vec![0; range + 1];
+        let mut prices:Vec<u32> = vec![u32::MAX; buffer.len() + 1];
+        let mut lengths:Vec<usize> = vec![0; buffer.len() + 1];
+        let mut offsets:Vec<usize> = vec![0; buffer.len() + 1];
 
         prices[0] = 0;
 
-        for i in 0..range {
+        for i in 0..buffer.len() {
             let literal_cost = prices[i] + LZEncoder::optimal_parse_literal_price(buffer[i]);
             if literal_cost < prices[i + 1] {
                 prices[i + 1] = literal_cost;
@@ -285,9 +283,9 @@ impl<'a> LZEncoder<'a>{
                 offsets[i + 1] = 0;
             }
 
-            if i + 4 >= range {continue;}
+            if i + 4 >= buffer.len() {continue;}
 
-            let (match_lengths, match_dists) = matcher.find_matches(buffer, start_pos + i);
+            let (match_lengths, match_dists) = matcher.find_matches(buffer, i);
             for j in 0..match_lengths.len() {
                 let match_price = prices[i] + LZEncoder::optimal_parse_match_price(match_lengths[j],match_dists[j]);
                 if match_price < prices[i + match_lengths[j]] {
@@ -298,14 +296,14 @@ impl<'a> LZEncoder<'a>{
             }
         }
 
-        if lengths[range] <= 1{
+        if lengths[buffer.len()] <= 1{
             let match_num = self.match_lengths.len();
             self.match_offsets.push(0);
             self.match_lengths.push(0);
             self.match_literal_lengths.push(0);
         }
 
-        let mut i = range;
+        let mut i = buffer.len();
         while i > 0 {
             if lengths[i] > 1 {
                 self.match_lengths.push(lengths[i]);
@@ -313,7 +311,7 @@ impl<'a> LZEncoder<'a>{
                 self.match_literal_lengths.push(0);
                 i -= lengths[i];
             } else {
-                self.literals.push(buffer[start_pos + i - 1]);
+                self.literals.push(buffer[i - 1]);
                 self.match_literal_lengths[self.match_lengths.len() - 1] += 1;
                 i -= 1;
             }
@@ -325,14 +323,14 @@ impl<'a> LZEncoder<'a>{
         self.literals = self.literals.iter().copied().rev().collect();
     }
 
-    pub fn parse(&mut self, buffer: &[u8], start_pos:usize, end_pos:usize) {
+    pub fn parse(&mut self, buffer: &[u8]) {
         self.literals.clear();
         self.match_lengths.clear();
         self.match_offsets.clear();
         self.match_literal_lengths.clear();
         match self.do_optimal_parsing{
-            true => self.optimal_parse(buffer, start_pos, end_pos),
-            false => self.simple_parse(buffer, start_pos, end_pos)
+            true => self.optimal_parse(buffer),
+            false => self.simple_parse(buffer)
         }
     }
 
@@ -402,8 +400,8 @@ impl<'a> LZEncoder<'a>{
         encoder.encode_all(&self.literals, usize::MAX);
     }
 
-    pub fn huffman_encode_chunk(&mut self, buffer: &[u8], start_pos: usize, end_pos: usize){
-        self.parse(buffer, start_pos, end_pos);
+    pub fn huffman_encode_chunk(&mut self, buffer: &[u8]){
+        self.parse(buffer);
 
         self.huffman_encode_literals();
         self.huffman_encode_lengths();
@@ -417,7 +415,7 @@ impl<'a> LZEncoder<'a>{
         for start_pos in (0..buffer.len()).step_by(chunk_size){
             let end_pos = min(start_pos + chunk_size, buffer.len());
             let chunk = &buffer[start_pos..end_pos];
-            self.huffman_encode_chunk(chunk, start_pos, end_pos)
+            self.huffman_encode_chunk(chunk);
         }
     }
 
@@ -566,10 +564,10 @@ mod tests {
 
         let start_time = time::Instant::now();
 
-        encoder.parse(&bytes, 0, bytes.len());
+        encoder.parse(&bytes);
 
         let elapsed_time = start_time.elapsed().as_millis();
-        println!("Simple parse took {elapsed_time}ms");
+        println!("Simple parse took {elapsed_time}ms at a speed of {}MB/s", ((bytes.len() as f32) / 1000000f32) / ((elapsed_time as f32) / 1000f32));
 
         //println!("{encoder}");
     }
@@ -582,13 +580,14 @@ mod tests {
         let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         let mut writer = BitWriter::new();
         let mut encoder:LZEncoder = LZEncoder::new(&mut writer, 64, true);
-        
+
         let start_time = time::Instant::now();
 
-        encoder.parse(&bytes, 0, bytes.len());
+        encoder.parse(&bytes);
 
         let elapsed_time = start_time.elapsed().as_millis();
-        println!("Optimal parse took {elapsed_time}ms");
+        println!("Simple parse took {elapsed_time}ms at a speed of {}MB/s", ((bytes.len() as f32) / 1000000f32) / ((elapsed_time as f32) / 1000f32));
+
     }
     #[test]
     fn lz_compression_decompression_test() {

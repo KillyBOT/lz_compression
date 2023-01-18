@@ -576,20 +576,20 @@ mod tests{
         let elapsed_time = start_time.elapsed().as_millis();
         println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
         
-        // let mut reader = BitReader::new(&encoded_bytes);
-        // let mut decoder = HuffmanDecoder::new(&mut reader);
+        let mut reader = BitReader::new(&encoded_bytes);
+        let mut decoder = HuffmanDecoder::new(&mut reader);
 
-        // let start_time = time::Instant::now();
+        let start_time = time::Instant::now();
 
-        // let decoded_bytes = decoder.decode_all();
+        let decoded_bytes = decoder.decode_all();
 
-        // let elapsed_time = start_time.elapsed().as_millis();
-        // println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));
+        let elapsed_time = start_time.elapsed().as_millis();
+        println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));
         
-        // assert!(contents.len() == decoded_bytes.len(), "Number of bytes different after encoding and decoding");
-        // for i in 0..contents.len(){
-        //     assert!(contents[i] == decoded_bytes[i], "Byte at position {i} different after encoding and decoding [{}] -> [{}]", contents[i], decoded_bytes[i]);
-        // }
+        assert!(contents.len() == decoded_bytes.len(), "Number of bytes different after encoding and decoding");
+        for i in 0..contents.len(){
+            assert!(contents[i] == decoded_bytes[i], "Byte at position {i} different after encoding and decoding [{}] -> [{}]", contents[i], decoded_bytes[i]);
+        }
     }
 
     #[test]

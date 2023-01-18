@@ -87,57 +87,64 @@ pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
     writer.get_bytes()
 }
 
-/*
-/// Simple LZW compression, 
-/// 
-/// I only made this to get a better understanding of how LZW encoding works.
+
+/// LZW compression.
 /// 
 /// In the event of a table overflow, the GIF approach of remaking the table is
 /// used.
-pub fn compress_lzw_as_bytes(bytes: &[u8]) -> Vec<u16> {
-    let mut codes = Vec::new();
-    let mut map:HashMap<Vec<u8>,u16> = HashMap::with_capacity(1 << MAX_CODE_LEN);
-    init_lzw_compression_table(&mut map);
+/// 
+/// This implementation is based on the C implementation found at
+/// https://rosettacode.org/wiki/LZW_compression#C. I think this implementation
+/// is what GIF uses, but I'm not sure.
+/*pub fn compress_lzw(bytes: &[u8]) -> Vec<u8> {
+    let mut writer = BitWriter::new();
+    let mut code_len:usize = MIN_CODE_LEN;
+    let mut curr_max_code:u16 = START_MAX_CODE;
+    let mut table:Vec<Option<u16>> = vec![None; (MAX_CODE as usize) * 256];
 
-    let mut code:u16 = START_CODE;
-    let mut buffer = Vec::new();
+    let mut code = bytes[0] as u16;
+    let mut next_code = START_CODE;
+    
+    for byte in &bytes[1..] {
+        let byte = *byte as u16;
+        
+        //let next_option = table[code as usize].next[byte as usize];
 
-    for byte in bytes{
-        let mut buffer_new = buffer.clone();
-        buffer_new.push(*byte);
+        if let Some(next) = table[(code as usize) << 8 + (byte as usize)]{
+            code = next;
+        } else {
+            //println!("{code}");
+            writer.write_bits_u16(code, code_len);
+            table[(code as usize) << 8 + (byte as usize)] = Some(next_code);
+            //table.insert((code, byte), next_code);
+            code = byte;
 
-        if map.contains_key(&buffer_new){
-            buffer = buffer_new;
-        } else{
-            codes.push(*map.get(&buffer).unwrap());
-            map.insert(buffer_new, code);
+            next_code += 1;
 
-            buffer.clear();
-            buffer.push(*byte);
+            if next_code == curr_max_code {
+                code_len += 1;
+                curr_max_code <<= 1;
+                //println!("Increasing code length to {code_len}");
+                if code_len > MAX_CODE_LEN {
+                    writer.write_bits_u16(CLEAR_CODE, code_len);
+                    
+                    code_len = MIN_CODE_LEN;
+                    curr_max_code = START_MAX_CODE;
+                    next_code = START_CODE;
 
-            code += 1;
-            if code >= MAX_CODE{
-
-                codes.push(CLEAR_CODE);
-
-                init_lzw_compression_table(&mut map);
-
-                code = START_CODE;
-
+                    //table.clear();
+                    table.fill(None);
+                }
             }
-
         }
     }
-    if !buffer.is_empty(){
-        codes.push(*map.get(&buffer).unwrap());
-    }
 
-    codes.push(EOD_CODE);
+    writer.write_bits_u16(code,code_len);
+    writer.write_bits_u16(EOD_CODE, code_len);
 
-    codes
+    writer.get_bytes()
 }
 */
-
 /// LZW decompression.
 /// 
 /// In the event of a table overflow, the GIF approach of remaking the table is
@@ -205,88 +212,10 @@ pub fn decompress_lzw(encoded_bytes: &[u8]) -> Vec<u8> {
             curr_max_code <<= 1;
         }
 
-
-
     }
 
     decoded_bytes
 }
-
-/*
-pub fn decompress_lzw_as_bytes(codes: &[u16]) -> Vec<u8> {
-    let mut decoded_bytes = Vec::new();
-    let mut code_len = MIN_CODE_LEN;
-    let mut curr_max_code:u16 = START_MAX_CODE;
-
-    let mut table:HashMap<u16, Vec<u8>> = HashMap::with_capacity(1 << MAX_CODE_LEN);
-    init_lzw_decompression_table(&mut table);
-
-    let mut prev = CLEAR_CODE;
-    let mut code = START_CODE;
-    //let mut entry = Vec::new();
-    let mut entry = Vec::new();
-
-    //decoded_bytes.extend(&entry);
-
-    for i in codes {
-        //println!("Old entry: {entry:?}");
-        //println!("{i}");
-
-        if prev == CLEAR_CODE{
-            prev = *i;
-            entry = table.get(&prev).unwrap().clone();
-            decoded_bytes.extend(&entry);
-            continue;
-        }
-        
-        match *i {
-            CLEAR_CODE  => {
-                //println!("Clear code found, resetting table...");
-                init_lzw_decompression_table(&mut table);
-
-                prev = CLEAR_CODE;
-                code = START_CODE;
-                code_len = MIN_CODE_LEN;
-                curr_max_code = 1 << MIN_CODE_LEN;
-
-            },
-            EOD_CODE => {
-                //println!("EOD code found");
-                break;
-            },
-            curr => {
-                if table.contains_key(&curr){ //curr < code
-                    //println!("In table");
-                    entry = table.get(&curr).unwrap().clone();
-                } else if curr == code {
-                    //println!("Not in table");
-                    entry = table.get(&prev).unwrap().clone();
-                    entry.push(entry[0]);
-                } 
-                else {
-                    panic!("Bad compression with symbol {curr}, current code is {code} and max code is {curr_max_code}");
-                }
-                //println!("New entry: {entry:?}\n");
-                decoded_bytes.extend(&entry);
-
-                table.insert(code, [table.get(&prev).unwrap().clone(),vec![entry[0]]].concat());
-
-                code += 1;
-                if code == curr_max_code {
-                    curr_max_code <<= 1;
-                    code_len += 1;
-                }
-                
-                prev = curr;
-            }
-        }
-        
-    }
-
-    decoded_bytes
-}
-*/
-
 
 #[cfg(test)]
 mod tests{

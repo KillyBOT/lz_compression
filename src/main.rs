@@ -2,6 +2,7 @@ mod huffman;
 mod bitstream;
 mod lzw;
 mod lz;
+mod lz77;
 
 use std::path::PathBuf;
 use clap::{Parser, Subcommand};
@@ -26,7 +27,7 @@ enum Commands {
 }
 
 fn main() {
-
+    
     //use std::{env, fs, time};
     //use crate::huffman::{encode_bytes_huffman, decode_bytes_huffman};
 

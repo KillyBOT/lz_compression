@@ -48,8 +48,7 @@ struct HuffmanNode {
 /// 
 /// The reason it's a struct is because there are instances where one may
 /// want to encode only a bit at a time, rather than all at once.
-pub struct HuffmanEncoder<'a>{
-    pub writer: &'a mut BitWriter,
+pub struct HuffmanEncoder{
     freq_table: Vec<u64>,
     max_symbols: usize,
     max_symbols_size: usize,
@@ -63,8 +62,7 @@ pub struct HuffmanEncoderIter<'a>{
     table_ref: &'a HuffmanTable
 }
 
-pub struct HuffmanDecoder<'a, 'b: 'a>{
-    pub reader: &'a mut BitReader<'b>,
+pub struct HuffmanDecoder{
     table: HuffmanTable,
     symbol_map: Vec<HuffmanSymbol>,
     level_map: Vec<usize>
@@ -179,13 +177,12 @@ impl HuffmanNode {
 
 }
 
-impl<'a> HuffmanEncoder<'a> {
-    pub fn new(writer: &'a mut BitWriter, max_symbols: usize) -> Self{
+impl HuffmanEncoder {
+    pub fn new(max_symbols: usize) -> Self{
 
         let max_symbols =  min(max_symbols, HUFFMAN_MAX_SYMBOLS);
 
         let mut encoder = HuffmanEncoder {
-            writer,
             freq_table:Vec::with_capacity(max_symbols),
             max_symbols:max_symbols,
             max_symbols_size:((max_symbols as f32).log2().ceil() as usize),
@@ -246,7 +243,6 @@ impl<'a> HuffmanEncoder<'a> {
         node_heap.pop().unwrap().leaves(&mut self.table);
         self.table.sort();
         self.limit_huffman_table_code_sizes();
-        self.write_huffman_table();
         self.build_huffman_code_map();
     }
 
@@ -305,22 +301,22 @@ impl<'a> HuffmanEncoder<'a> {
     /// denoting the symbol itself, and `bits_per_level` bits denoting the level
     /// of the symbol. This is better than writing the code itself, since the codes
     /// can get quite long.
-    fn write_huffman_table(&mut self) {
+    fn write_huffman_table(&mut self, writer: &mut BitWriter) {
 
         assert!(self.table.len() <= HUFFMAN_MAX_SYMBOLS, "The given Huffman table has too many symbols");
 
-        self.writer.write_bits_u32(self.table.len() as u32, HUFFMAN_MAX_SYMBOLS_SIZE);
+        writer.write_bits_u32(self.table.len() as u32, HUFFMAN_MAX_SYMBOLS_SIZE);
 
         let max_level = self.table.iter().max().unwrap().level; //Is this really necessary? I guess every little bit helps...
-        self.writer.write_bits_u32(max_level as u32, 4);
+        writer.write_bits_u32(max_level as u32, 4);
         let bits_per_level = max((max_level as f32).log2().ceil() as usize, 1);
         //println!("Symbol num: {} Max level: {max_level} Bits per level: {bits_per_level}", self.table.len());
 
         for data in &self.table{
             let symbol = data.symbol;
             let level = data.level;
-            self.writer.write_bits_u32(symbol as u32, HUFFMAN_MAX_SYMBOLS_SIZE);
-            self.writer.write_bits_u32(level as u32 - 1, bits_per_level);
+            writer.write_bits_u32(symbol as u32, HUFFMAN_MAX_SYMBOLS_SIZE);
+            writer.write_bits_u32(level as u32 - 1, bits_per_level);
         }
     }
 
@@ -379,9 +375,9 @@ impl<'a> HuffmanEncoder<'a> {
     /// 
     /// WARNING: After encoding symbols, remember to `finish` the encoder to 
     /// add the proper padding!
-    pub fn encode_symbol(&mut self, symbol:HuffmanSymbol) {
+    pub fn encode_symbol(&mut self, symbol:HuffmanSymbol, writer: &mut BitWriter) {
         if let Some((code, length)) = self.code_map[symbol as usize]{
-            self.writer.write_bits_u32(code, length);
+            writer.write_bits_u32(code, length);
         } else {
             panic!("Encoded symbol not found, this should never happen...");
         }
@@ -391,36 +387,37 @@ impl<'a> HuffmanEncoder<'a> {
     /// 
     /// WARNING: After encoding symbols, remember to `finish` the encoder to
     /// add the proper padding!
-    pub fn encode_symbols(&mut self, symbols: &[HuffmanSymbol]) {
-        self.writer.write_bits_u32(symbols.len() as u32, HUFFMAN_CHUNK_SIZE_BITS);
+    pub fn encode_symbols(&mut self, symbols: &[HuffmanSymbol], writer: &mut BitWriter) {
+        writer.write_bits_u32(symbols.len() as u32, HUFFMAN_CHUNK_SIZE_BITS);
         //println!("Encoded symbol num written: {}", symbols.len());
         for symbol in symbols {
             if let Some((code, length)) = self.code_map[*symbol as usize]{
-                self.writer.write_bits_u32(code, length);
+                writer.write_bits_u32(code, length);
                 //self.last_length = length;
             }
         }
     }
 
-    pub fn encode_chunk(&mut self, chunk: &[HuffmanSymbol]){
+    pub fn encode_chunk(&mut self, chunk: &[HuffmanSymbol], writer: &mut BitWriter){
 
         self.build_frequency_table(chunk);
         self.build_huffman_table();
-        self.encode_symbols(chunk);
+        self.write_huffman_table(writer);
+        self.encode_symbols(chunk, writer);
     }
 
-    pub fn encode_all(&mut self, bytes: &[HuffmanSymbol], chunk_size: usize) {
+    pub fn encode_all(&mut self, bytes: &[HuffmanSymbol], chunk_size: usize, writer: &mut BitWriter) {
         let chunk_size = min(chunk_size, bytes.len() as usize);
         for i in (0..bytes.len()).step_by(chunk_size){
             let chunk = &bytes[i..min(bytes.len(),i+chunk_size)];
-            self.encode_chunk(chunk);
+            self.encode_chunk(chunk ,writer);
             //println!("Number of symbols: [{}] Smallest code length: [{}] Largest code length: [{}]", huffman_table.len(),  huffman_table.iter().min().unwrap().level,  huffman_table.iter().max().unwrap().level);
         }
     }
 
-    pub fn encode_all_bytes(&mut self, bytes: &[u8], chunk_size: usize) {
+    pub fn encode_all_bytes(&mut self, bytes: &[u8], chunk_size: usize, writer: &mut BitWriter) {
         let symbols = HuffmanEncoder::bytes_to_symbols(bytes);
-        self.encode_all(&symbols, chunk_size);
+        self.encode_all(&symbols, chunk_size, writer);
     }
 
     pub fn bytes_to_symbols(bytes: &[u8]) -> Vec<HuffmanSymbol>{
@@ -450,27 +447,26 @@ impl<'a> Iterator for HuffmanEncoderIter<'a> {
     }
 }
 
-impl<'a, 'b: 'a> HuffmanDecoder<'a, 'b> {
-    pub fn new(reader: &'a mut BitReader<'b>) -> Self {
+impl HuffmanDecoder{
+    pub fn new() -> Self {
         HuffmanDecoder { 
-            reader, 
             table: HuffmanTable::with_capacity(HUFFMAN_MAX_SYMBOLS), 
             symbol_map: vec![0; 1 << MAX_CODE_LEN], 
-            level_map: vec![0; 1 << MAX_CODE_LEN], 
+            level_map: vec![0; 1 << MAX_CODE_LEN]
         }
     }
 
-    pub fn read_huffman_table(&mut self) {
+    pub fn read_huffman_table(&mut self, reader: &mut BitReader) {
 
-        let symbol_num = self.reader.read_bits_into_u32(HUFFMAN_MAX_SYMBOLS_SIZE).unwrap() as usize;
-        let max_level = self.reader.read_bits_into_u32(4).unwrap() as i32;
+        let symbol_num = reader.read_bits_into_u32(HUFFMAN_MAX_SYMBOLS_SIZE).unwrap() as usize;
+        let max_level = reader.read_bits_into_u32(4).unwrap() as i32;
         let bits_per_level = max((max_level as f32).log2().ceil() as usize,1);
         //println!("Preliminary data read\nSymbol num: [{symbol_num}] Max level: [{max_level}] Bits per level: [{bits_per_level}]");
 
         self.table.clear();
         for _ in 0..symbol_num{
-            let symbol = self.reader.read_bits_into_u32(HUFFMAN_MAX_SYMBOLS_SIZE).unwrap() as HuffmanSymbol;
-            let level = self.reader.read_bits_into_u32(bits_per_level).unwrap() as usize + 1;
+            let symbol = reader.read_bits_into_u32(HUFFMAN_MAX_SYMBOLS_SIZE).unwrap() as HuffmanSymbol;
+            let level = reader.read_bits_into_u32(bits_per_level).unwrap() as usize + 1;
             self.table.push(HuffmanTableData{ symbol, level });
         }
         //println!("Huffman table read: {:?}", self.table);
@@ -523,16 +519,16 @@ impl<'a, 'b: 'a> HuffmanDecoder<'a, 'b> {
 
     }
 
-    pub fn decode_one(&mut self) -> HuffmanSymbol {
-        let path = self.reader.peek_bits_into_u32_with_shift(MAX_CODE_LEN).unwrap();
+    pub fn decode_one(&mut self, reader: &mut BitReader) -> HuffmanSymbol {
+        let path = reader.peek_bits_into_u32_with_shift(MAX_CODE_LEN).unwrap();
 
-        self.reader.empty_bits(self.level_map[path as usize] as usize);
+        reader.empty_bits(self.level_map[path as usize] as usize);
 
         self.symbol_map[path as usize]
     }
 
-    pub fn decode_chunk(&mut self) -> Vec<HuffmanSymbol> {
-        let chunk_size = self.reader.read_bits_into_u32(HUFFMAN_CHUNK_SIZE_BITS).unwrap() as usize;
+    pub fn decode_chunk(&mut self, reader: &mut BitReader) -> Vec<HuffmanSymbol> {
+        let chunk_size = reader.read_bits_into_u32(HUFFMAN_CHUNK_SIZE_BITS).unwrap() as usize;
         let mut decoded = Vec::with_capacity(chunk_size);
         //println!("Encoded symbol num read: {}", chunk_size);
         //println!("Symbol map generated");
@@ -559,14 +555,14 @@ impl<'a, 'b: 'a> HuffmanDecoder<'a, 'b> {
         while bytes_to_decode > 0 {
             //println!("{:011b} {}",path, bits_to_read);
             //let bit = bitstream.read_bit().unwrap();
-            let path = self.reader.peek_bits_into_u32_with_shift(MAX_CODE_LEN).unwrap();
+            let path = reader.peek_bits_into_u32_with_shift(MAX_CODE_LEN).unwrap();
             //println!("{:011b}",path);
             //let data = symbol_map[path as usize];
             let symbol = self.symbol_map[path as usize];
             let level = self.level_map[path as usize];
 
             decoded.push(symbol);
-            self.reader.empty_bits(level);
+            reader.empty_bits(level);
             bytes_to_decode -= 1;
         }
 
@@ -578,18 +574,18 @@ impl<'a, 'b: 'a> HuffmanDecoder<'a, 'b> {
     /// WARNING: I don't know what this does if the encoded bytes weren't created
     /// using my `compress_huffman` function. Therefore, I'd advise you don't
     /// use it on anything not created using this function.
-    pub fn decode_all(&mut self) -> Vec<HuffmanSymbol> {
+    pub fn decode_all(&mut self, reader: &mut BitReader) -> Vec<HuffmanSymbol> {
         let mut decoded = Vec::new();
-        while self.reader.remaining_bits() > HUFFMAN_CHUNK_SIZE_BITS {
-            self.read_huffman_table();
-            decoded.append(&mut self.decode_chunk());
+        while reader.remaining_bits() > HUFFMAN_CHUNK_SIZE_BITS {
+            self.read_huffman_table(reader);
+            decoded.append(&mut self.decode_chunk(reader));
         }
 
         decoded
     }
 
-    pub fn decode_all_bytes(&mut self) -> Vec<u8> {
-        HuffmanDecoder::symbols_to_bytes(&self.decode_all())
+    pub fn decode_all_bytes(&mut self, reader: &mut BitReader) -> Vec<u8> {
+        HuffmanDecoder::symbols_to_bytes(&self.decode_all(reader))
     }
 
     pub fn symbols_to_bytes(symbols: &[HuffmanSymbol]) -> Vec<u8> {
@@ -631,22 +627,22 @@ mod tests{
 
         let start_time = time::Instant::now();
         let mut writer = BitWriter::new();
-        let mut encoder = HuffmanEncoder::new(&mut writer, HUFFMAN_MAX_SYMBOLS);
+        let mut encoder = HuffmanEncoder::new(HUFFMAN_MAX_SYMBOLS);
 
         let start_time = time::Instant::now();
 
-        encoder.encode_all_bytes(&contents, chunk_size);
-        let encoded_bytes = encoder.writer.get_bytes();
+        encoder.encode_all_bytes(&contents, chunk_size, &mut writer);
+        let encoded_bytes = writer.get_bytes();
 
         let elapsed_time = start_time.elapsed().as_millis();
         println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
         
         let mut reader = BitReader::new(&encoded_bytes);
-        let mut decoder = HuffmanDecoder::new(&mut reader);
+        let mut decoder = HuffmanDecoder::new();
 
         let start_time = time::Instant::now();
 
-        let decoded_bytes = decoder.decode_all_bytes();
+        let decoded_bytes = decoder.decode_all_bytes(&mut reader);
 
         let elapsed_time = start_time.elapsed().as_millis();
         println!("Decompression time:[{}]ms Speed:[{}]MB/s", elapsed_time, ((encoded_bytes.len() as f32) / 1000f32) / (elapsed_time as f32));

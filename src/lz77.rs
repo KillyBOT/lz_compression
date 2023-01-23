@@ -1,13 +1,11 @@
-use crate::bitstream::{BitReader, BitWriter};
 use std::collections::HashMap;
 use std::fmt::{self};
-use std::cmp::{min, max};
+use std::cmp::{min};
 
 const MAX_MATCH_NUM:usize = 16;
 const MIN_MATCH_LEN:usize = 4;
 
 type LZ77MapKey = u32;
-
 struct LZ77MatchFinder {
     window_size:usize,
     min_match_len:usize,
@@ -15,15 +13,15 @@ struct LZ77MatchFinder {
     next_map:HashMap<usize, usize>
 }
 
-#[derive(Debug)]
-pub struct LZ77Match {
-    length: usize,
-    offset: usize
+#[derive(Clone, Copy)]
+pub enum LZ77Data {
+    Literal(u8),
+    Match(usize, usize)
+
 }
-#[derive(Debug)]
+
 pub struct LZ77Encoded {
-    literals: Vec<u8>,
-    matches: Vec<LZ77Match>
+    data: Vec<LZ77Data>
 }
 
 fn key_from_bytes(buffer: &[u8], pos: usize) -> LZ77MapKey{
@@ -38,13 +36,12 @@ fn key_from_bytes(buffer: &[u8], pos: usize) -> LZ77MapKey{
     hash
 }
 
-impl LZ77Match {
-    pub fn length(&self) -> usize { self.length; }
-    pub fn offset(&self) -> usize { self.offset; }
-}
-
 impl LZ77MatchFinder {
     fn new(window_size:usize, min_match_len:usize) -> Self {
+
+        assert!(min_match_len > 0, "Minimum match length cannot be 0!");
+        assert!(window_size > 0, "Window size must be greater than 1!");
+
         LZ77MatchFinder {
             window_size,
             min_match_len,
@@ -62,20 +59,19 @@ impl LZ77MatchFinder {
         self.head_map.insert(key, pos);
     }
 
-    fn find_match(&mut self, buffer:&[u8], pos: usize) -> (usize, usize) {
+    fn find_match(&mut self, buffer:&[u8], pos: usize) -> LZ77Data {
         let mut length:usize = 0;
         let mut offset:usize = 0;
 
         let min_pos:usize = if self.window_size > pos {0} else {pos - self.window_size};
-        let mut next_option = self.head_map.get(&key);
-
-        let mut matches = 0;
+        let mut next_option = self.head_map.get(&key_from_bytes(buffer, pos));
+        let mut match_num = 0;
         
         while let Some(next) = next_option {
             let next = *next;
             if next < min_pos {break;}
-            matches += 1;
-            if matches >= MAX_MATCH_NUM {break;}
+            match_num += 1;
+            if match_num >= MAX_MATCH_NUM {break;}
 
             let match_len = self.max_match_len(buffer, pos, next);
             if match_len > length {
@@ -86,120 +82,150 @@ impl LZ77MatchFinder {
             next_option = self.next_map.get(&next);
         }
 
-        self.insert(pos);
+        self.insert(buffer, pos);
 
         //println!("Pos: {pos} Best match: {best_match_pos} Best match length; {best_match_len}");
 
-        LZ77Match { length, offset }
+        if length >= self.min_match_len && offset >= self.min_match_len {LZ77Data::Match(length, offset)} else {LZ77Data::Literal(buffer[pos])}
     }
 
-    fn find_matches(&mut self, buffer:&[u8], pos: usize) -> Vec<LZ77Match> {
-        let mut matches = Vec::with_capacity(MAX_MATCH_NUM);
+    fn find_matches(&mut self, buffer:&[u8], pos: usize) -> Vec<LZ77Data> {
+        let mut data = Vec::with_capacity(MAX_MATCH_NUM);
 
         let min_pos:usize = if self.window_size > pos {0} else {pos - self.window_size};
-        let mut next_option = self.head_map.get(&key);
-        let mut matches = 0;
+        let mut next_option = self.head_map.get(&key_from_bytes(buffer, pos));
+        let mut match_num = 0;
         
         while let Some(next) = next_option {
             let next = *next;
-
             if next < min_pos {break;}
 
-            matches += 1;
-            if matches >= MAX_MATCH_NUM {break;}
+            match_num += 1;
+            if match_num >= MAX_MATCH_NUM {break;}
 
             let length = self.max_match_len(buffer, pos, next);
-            let offset = pos - next;
 
-            if match_len > 0 {
-                matches.push(LZ77Match{ length, offset });
+            if length >= self.min_match_len {
+                data.push(LZ77Data::Match(length, pos - next));
             }
 
             next_option = self.next_map.get(&next);
         }
 
-        self.insert(pos);
+        self.insert(buffer, pos);
 
         //println!("Pos: {pos} Best match: {best_match_pos} Best match length; {best_match_len}");
 
-        matches
+        data
     }
 
 
     fn max_match_len(&self, buffer: &[u8], source_pos: usize, match_pos: usize) -> usize {
 
         let mut len = 0;
-        while source_pos + len < buffer.len() && buffer[source_pos + len] == buffer[match_pos + len] {
+        let mut dist = source_pos - match_pos;
+
+        while source_pos + len < buffer.len() && buffer[source_pos + len] == buffer[match_pos + (len % dist)] {
             len += 1;
         }
 
-        if len >= MIN_MATCH_LEN {len} else {0}
+        len
     }
 }
 
-pub fn lz77_parse_simple(buffer: &[u8], window_size: usize, min_match_len: usize) -> LZ77Encoded{
+pub fn lz77_compress_simple(buffer: &[u8], window_size: usize, min_match_len: usize) -> LZ77Encoded{
     let mut matcher: LZ77MatchFinder = LZ77MatchFinder::new(window_size, min_match_len);
-    let mut matches = Vec::new();
-    let mut literals = Vec::with_capacity(buffer.len());
-    
-    let mut length = 0;
-    let mut literal_num = 0;
+    let mut data = Vec::with_capacity(buffer.len());
     let mut pos = 0;
 
     while pos < buffer.len() {
-        let lz77_match = matcher.find_match(buffer, pos);
-        let mut length = lz77_match.length();
-        if length >= min_match_len {
+        //println!("\r{pos} {} {}", buffer.len(), (pos as f32) / (buffer.len() as f32));
 
-            //println!("Pos: {pos} Match: [length: {match_len} offset: {} literal_count: {literal_num}]", pos - match_pos);
-            
-            matches.push(lz77_match);
-            self.match_literal_lengths.push(literal_num);
+        let d = matcher.find_match(buffer, pos);
+        data.push(d);
 
-            literal_num = 0;
-            match_len -= 1;
-
-            while match_len > 0{
-                pos += 1;
-                matcher.insert(buffer, pos);
-                match_len -= 1;
-            }
-        } else {
-            //println!("Pos: {pos} Literal: {}", buffer[pos]);
-            literals.push(buffer[pos]);
-            literal_num += 1;
+        match d {
+            LZ77Data::Match(length, _) => {
+                //println!("Found match of length {length}");
+                let mut length = length - 1;
+                while length > 0 {
+                    pos += 1;
+                    matcher.insert(buffer, pos);
+                    length -= 1;
+                }
+            },
+            _ => ()
         }
 
         pos += 1;
     }
 
-    if literal_num > 0 {
-        //println!("Match: [length: 0 offset: 0 literal_count: {literal_num}]");
-        self.match_lengths.push(0);
-        self.match_offsets.push(0);
-        self.match_literal_lengths.push(literal_num);
-    }
-
-    LZ77Encoded {literals, matches}
+    LZ77Encoded { data }
 
     //println!("Match lengths: {match_lengths:?}\nMatch offsets: {match_offsets:?}\nLiteral lengths: {literal_lengths:?}\nLiterals: {literals:?}");
 }
 
+pub fn lz77_decompress(encoded: LZ77Encoded) -> Vec<u8> {
+    let mut decompressed = Vec::new();
+
+    for data in encoded.data {
+        match data {
+            LZ77Data::Literal(val) => {
+                decompressed.push(val);
+            },
+            LZ77Data::Match(length, offset) => {
+                let mut start_pos = decompressed.len() - offset;
+                for i in 0..length {
+                    decompressed.push(decompressed[start_pos + (i % offset)]);
+                }
+            }
+        }
+    }
+
+    decompressed
+}
+
+impl fmt::Display for LZ77Encoded{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut repr = String::new();
+
+        for d in &self.data {
+            match d{
+                LZ77Data::Literal(val) => repr.push_str(format!("{} ", *val).as_str()),
+                LZ77Data::Match(length, offset) => repr.push_str(format!("[Length: {} Offset: {}] ", *length, *offset).as_str())
+            }
+        }
+
+        write!(f, "{repr}")
+        
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::lz77::lz77_decompress;
+
     #[test]
-    fn lz77_parse_simple(){
-        use crate::lz77::{lz77_parse_simple, };
+    fn lz77_compress_decompress_simple() {
+        use crate::lz77::{lz77_compress_simple};
         use std::{fs, time};
         
-        //let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
-        let bytes = "Blah blah blah!".as_bytes().to_vec();
+        let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
+        //let bytes = "Blah blah blah blah blah!".as_bytes().to_vec();
+        let start_time = time::Instant::now();
+        let lz77_encoded = lz77_compress_simple(&bytes, 32 * 1024, 4);
+        let elapsed_time = start_time.elapsed().as_millis();
+        println!("Simple compression took {elapsed_time}ms at a speed of {}MB/s", ((bytes.len() as f32) / 1000000f32) / ((elapsed_time as f32) / 1000f32));
 
         let start_time = time::Instant::now();
-        let lz77_encoded = lzyy_parse_simple(&bytes, 32 * 1024, 4);
+        let lz77_decoded = lz77_decompress(lz77_encoded);
         let elapsed_time = start_time.elapsed().as_millis();
-        println!("Simple parse took {elapsed_time}ms at a speed of {}MB/s", ((bytes.len() as f32) / 1000000f32) / ((elapsed_time as f32) / 1000f32));
+        println!("Decompression took {elapsed_time}ms at a speed of {}MB/s", ((lz77_decoded.len() as f32) / 1000000f32) / ((elapsed_time as f32) / 1000f32));
 
-        //println!("{encoder}");
+        assert!(lz77_decoded.len() == bytes.len(), "LZ77 compression and decompression resulted in different number of bytes");
+        for i in 0..lz77_decoded.len() {
+            assert!(lz77_decoded[i] == bytes[i], "LZ77 compression and decompression resulted in different bytes, at position {i}");
+        }
+
     }
 }

@@ -239,7 +239,7 @@ mod tests {
         use crate::lz77::{lz77_compress_simple, encoded_byte_num};
         use std::{fs, time};
         
-        let bytes = fs::read("enwik8").expect("File could not be opened and/or read");
+        let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         //let bytes = "Blah blah blah blah blah!".as_bytes().to_vec();
         let start_time = time::Instant::now();
         let lz77_encoded = lz77_compress_simple(&bytes, 0xFFFF, 3, 256);

@@ -57,6 +57,7 @@ impl<'a> BitReader<'a>{
     pub fn remaining_bits(&self) -> usize {
         self.remaining_bits
     }
+
     fn refill(&mut self) {
         while self.unused_bits_in_buffer >= 8 && self.bytes.len() > 0{
             let byte = self.bytes[0];

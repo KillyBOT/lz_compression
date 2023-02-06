@@ -273,15 +273,15 @@ impl HuffmanEncoder {
 
         for i in (0..self.table.len()).rev(){
 
-            if k <= k_max {
-                break;
-            }
+            if k <= k_max { break; }
 
             while self.table[i].level < MAX_CODE_LEN {
                 self.table[i].level += 1;
                 k -= 1 << (MAX_CODE_LEN - self.table[i].level);
             }
+
         }
+        
         for i in 0..self.table.len(){
             while k + (1 << (MAX_CODE_LEN - self.table[i].level)) <= k_max {
                 k += 1 << (MAX_CODE_LEN - self.table[i].level);
@@ -635,7 +635,7 @@ mod tests{
         let encoded_bytes = writer.get_bytes();
 
         let elapsed_time = start_time.elapsed().as_millis();
-        println!("Bytes unencoded: [{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
+        println!("Bytes unencoded:[{}] Bytes encoded:[{}] Compression ratio:[{}]\nTime:[{}]ms Speed:[{}]MB/s",contents.len(), encoded_bytes.len(), (encoded_bytes.len() as f32) / (contents.len() as f32), elapsed_time, ((contents.len() as f32) / 1000f32) / (elapsed_time as f32));
         
         let mut reader = BitReader::new(&encoded_bytes);
         let mut decoder = HuffmanDecoder::new();

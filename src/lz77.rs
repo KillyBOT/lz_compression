@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use std::fmt::{self};
 
-const MAX_MATCH_NUM:usize = 1;
-
 type LZ77MapKey = [u8; 3];
 struct LZ77MatchFinder <'a>{
     buffer: &'a [u8],
     window_size:usize,
     min_match_len:usize,
     max_match_len:usize,
+    max_match_num:usize,
     head_map:HashMap<LZ77MapKey, usize>,
     next_map:HashMap<usize, usize>
 }
@@ -25,7 +24,7 @@ pub struct LZ77Encoded {
 }
 
 impl<'a> LZ77MatchFinder <'a> {
-    fn new(buffer: &'a [u8], window_size:usize, min_match_len:usize, max_match_len:usize) -> Self {
+    fn new(buffer: &'a [u8], window_size:usize, min_match_len:usize, max_match_len:usize, max_match_num:usize) -> Self {
 
         assert!(min_match_len > 0, "Minimum match length cannot be 0!");
         assert!(window_size > 0, "Window size must be greater than 1!");
@@ -35,6 +34,7 @@ impl<'a> LZ77MatchFinder <'a> {
             window_size,
             min_match_len,
             max_match_len,
+            max_match_num,
             head_map: HashMap::with_capacity(window_size),
             next_map: HashMap::with_capacity(window_size)
         }
@@ -80,7 +80,7 @@ impl<'a> LZ77MatchFinder <'a> {
             let next = *next;
             if next < min_pos {break;}
             match_num += 1;
-            if match_num > MAX_MATCH_NUM {break;}
+            if match_num > self.max_match_num {break;}
 
             let match_len = self.match_len(pos + 3, next + 3) + 3;
             if match_len > length {
@@ -99,7 +99,7 @@ impl<'a> LZ77MatchFinder <'a> {
     }
 
     fn find_matches(&mut self, pos: usize) -> Vec<LZ77Data> {
-        let mut data = Vec::with_capacity(MAX_MATCH_NUM);
+        let mut data = Vec::with_capacity(self.max_match_num);
 
         let min_pos:usize = if self.window_size > pos {0} else {pos - self.window_size};
         let mut next_option = self.head_map.get(&self.key_from_bytes(pos));
@@ -110,7 +110,7 @@ impl<'a> LZ77MatchFinder <'a> {
             if next < min_pos {break;}
 
             match_num += 1;
-            if match_num >= MAX_MATCH_NUM {break;}
+            if match_num >= self.max_match_num {break;}
 
             let length = self.match_len(pos + 3, next + 3) + 3;
 
@@ -148,8 +148,8 @@ impl<'a> LZ77MatchFinder <'a> {
     }
 }
 
-pub fn lz77_compress_simple(buffer: &[u8], window_size: usize, min_match_len: usize, max_match_len: usize) -> LZ77Encoded{
-    let mut matcher: LZ77MatchFinder = LZ77MatchFinder::new(buffer, window_size, min_match_len, max_match_len);
+pub fn lz77_compress_simple(buffer: &[u8], window_size: usize, min_match_len: usize, max_match_len: usize, max_match_num: usize) -> LZ77Encoded{
+    let mut matcher: LZ77MatchFinder = LZ77MatchFinder::new(buffer, window_size, min_match_len, max_match_len, max_match_num);
     let mut data = Vec::with_capacity(buffer.len());
     let mut pos = 0;
 
@@ -242,7 +242,7 @@ mod tests {
         let bytes = fs::read("lorem_ipsum").expect("File could not be opened and/or read");
         //let bytes = "Blah blah blah blah blah!".as_bytes().to_vec();
         let start_time = time::Instant::now();
-        let lz77_encoded = lz77_compress_simple(&bytes, 0xFFFF, 3, 256);
+        let lz77_encoded = lz77_compress_simple(&bytes, 0xFFFF, 3, 256, 6);
         let encoded_num = encoded_byte_num(&lz77_encoded, 3);
         let elapsed_time = start_time.elapsed().as_millis();
         println!("Bytes unencoded:[{}] Bytes encoded:[{encoded_num}] Compression Ratio:[{}]\nTime:[{elapsed_time}]ms Speed:[{}]MB/s", bytes.len(), (encoded_num as f32) / (bytes.len() as f32), ((bytes.len() as f32) / 1000000f32) / ((elapsed_time as f32) / 1000f32));
